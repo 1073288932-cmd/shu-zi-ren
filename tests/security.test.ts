@@ -1,7 +1,6 @@
 // @vitest-environment node
 
 import { describe, it, expect } from 'vitest'
-import path from 'path'
 import { validateExternalUrl, checkResourcePath } from '../electron/security'
 
 const BASE_DIR = '/safe/resources'
