@@ -1,7 +1,7 @@
 # 教学智能体桌面 MVP — Design Doc
 
 Date: 2026-05-18  
-Status: In Review
+Status: Approved
 
 ---
 
