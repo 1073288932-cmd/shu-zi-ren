@@ -1,0 +1,18 @@
+{
+  "appId": "com.shuziren.teachingagent",
+  "productName": "数字人助手",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*"
+  ],
+  "mac": {
+    "category": "public.app-category.education",
+    "target": "dmg"
+  },
+  "win": {
+    "target": "nsis"
+  }
+}
