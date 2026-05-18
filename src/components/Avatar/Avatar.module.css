@@ -1,0 +1,88 @@
+.avatar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 0 8px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.character {
+  font-size: 64px;
+  line-height: 1;
+  display: block;
+  user-select: none;
+}
+
+.statusBadge {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #7dd3fc;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 2px 10px;
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Idle: gentle float */
+.avatar[data-mood="idle"] .character {
+  animation: idle-float 3s ease-in-out infinite;
+}
+@keyframes idle-float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-5px); }
+}
+
+/* Thinking: pulse */
+.avatar[data-mood="thinking"] .character {
+  animation: thinking-pulse 0.9s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.65; transform: scale(0.94); }
+}
+
+/* Talking: vertical scale wave */
+.avatar[data-mood="talking"] .character {
+  animation: talking-wave 0.25s ease-in-out infinite alternate;
+}
+@keyframes talking-wave {
+  from { transform: scaleY(1); }
+  to   { transform: scaleY(1.05); }
+}
+
+/* Error: horizontal shake */
+.avatar[data-mood="error"] .character {
+  animation: error-shake 0.45s ease-in-out forwards;
+}
+@keyframes error-shake {
+  0%,100% { transform: translateX(0); }
+  20%     { transform: translateX(-5px); }
+  40%     { transform: translateX(5px); }
+  60%     { transform: translateX(-4px); }
+  80%     { transform: translateX(4px); }
+}
+
+/* Pushing overlay: bouncing */
+.avatar[data-pushing="true"] .character {
+  animation: pushing-bounce 0.55s ease-in-out infinite alternate !important;
+}
+@keyframes pushing-bounce {
+  from { transform: translateY(0) rotate(0deg); }
+  to   { transform: translateY(-8px) rotate(3deg); }
+}
+
+.pushingFlag {
+  position: absolute;
+  top: 8px;
+  right: 24px;
+  font-size: 18px;
+  animation: flag-wave 0.6s ease-in-out infinite alternate;
+}
+@keyframes flag-wave {
+  from { transform: rotate(-10deg); }
+  to   { transform: rotate(10deg); }
+}
