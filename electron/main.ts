@@ -12,6 +12,7 @@ const resourceWhitelist = new Map<string, string>([
 
 let mainWindow: BrowserWindow | null = null
 let maxHeight = 800
+let lastResizeAt = 0
 
 function createWindow() {
   const { x, y, width, height } = screen.getPrimaryDisplay().workArea
@@ -62,12 +63,16 @@ app.on('activate', () => {
   if (mainWindow === null) createWindow()
 })
 
-// IPC: resize window height (clamped to maxHeight)
-ipcMain.on('resize-window', (event, height: number) => {
+// IPC: resize window height (clamped to maxHeight, throttled to 60ms)
+ipcMain.on('resize-window', (event, height: unknown) => {
+  if (typeof height !== 'number' || !isFinite(height) || isNaN(height) || height <= 0) return
+  const now = Date.now()
+  if (now - lastResizeAt < 60) return
+  lastResizeAt = now
   const win = BrowserWindow.fromWebContents(event.sender)
   if (!win) return
   const bounds = win.getBounds()
-  win.setBounds({ ...bounds, height: Math.min(Math.max(height, 200), maxHeight) })
+  win.setBounds({ ...bounds, height: Math.min(Math.max(Math.ceil(height), 200), maxHeight) })
 })
 
 // IPC: open external URL
@@ -83,13 +88,22 @@ ipcMain.handle('open-resource', async (_, resourceId: string): Promise<AppError 
 
   if ('error' in result) return result.error
 
-  if (!fs.existsSync(result.targetPath)) {
-    return {
-      code: 'RESOURCE_NOT_FOUND',
-      message: `File not found: ${result.targetPath}`,
-      recoverable: false,
-    }
+  // Resolve symlinks and re-verify the real path is still inside baseDir
+  let realPath: string
+  try {
+    realPath = fs.realpathSync(result.targetPath)
+  } catch {
+    return { code: 'RESOURCE_NOT_FOUND', message: `File not found: ${result.targetPath}`, recoverable: false }
   }
 
-  await shell.openPath(result.targetPath)
+  const normalizedBase = path.normalize(path.resolve(RESOURCE_BASE_DIR))
+  const rel = path.relative(normalizedBase, realPath)
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    return { code: 'RESOURCE_NOT_ALLOWED', message: `Symlink escape detected for resource "${resourceId}"`, recoverable: false }
+  }
+
+  const openError = await shell.openPath(realPath)
+  if (openError) {
+    return { code: 'RESOURCE_OPEN_FAILED', message: openError, recoverable: true }
+  }
 })
