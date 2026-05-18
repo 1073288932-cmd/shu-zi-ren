@@ -5,9 +5,9 @@ import { validateExternalUrl, checkResourcePath } from './security'
 import type { AppError } from '../shared/types'
 
 // MVP: hardcoded resource whitelist. Replace with config file loader later.
-const RESOURCE_BASE_DIR = path.join(app.getPath('userData'), 'resources')
+const RESOURCE_BASE_DIR = path.join(app.getPath('home'), 'Desktop')
 const resourceWhitelist = new Map<string, string>([
-  ['res-local-001', path.join(RESOURCE_BASE_DIR, 'friction-slides.pdf')],
+  ['res-local-001', path.join(RESOURCE_BASE_DIR, '苏科版初中物理八年级下册 24年审定(1).pdf')],
 ])
 
 let mainWindow: BrowserWindow | null = null

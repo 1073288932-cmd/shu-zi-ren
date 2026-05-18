@@ -16,14 +16,16 @@ interface ResourceCardProps {
 
 export function ResourceCard({ card }: ResourceCardProps) {
   const removeResourceCard = useAgentStore(state => state.removeResourceCard)
+  const setError = useAgentStore(state => state.setError)
+  const setMood = useAgentStore(state => state.setMood)
 
   async function handleOpen() {
     if (card.kind === 'external') {
       const err = await window.electronAPI.openExternal(card.url)
-      if (err) console.error('openExternal error:', err)
+      if (err) { setMood('error'); setError(err) }
     } else {
       const err = await window.electronAPI.openResource(card.id)
-      if (err) console.error('openResource error:', err)
+      if (err) { setMood('error'); setError(err) }
     }
   }
 
