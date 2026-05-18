@@ -1,7 +1,7 @@
 # 教学智能体桌面 MVP — Design Doc
 
 Date: 2026-05-18  
-Status: Approved
+Status: In Review
 
 ---
 
@@ -68,14 +68,25 @@ export interface AvatarState {
   isPushing: boolean
 }
 
-export interface ResourceCard {
-  id: string
-  title: string
-  type: 'video' | 'doc' | 'exercise' | 'experiment' | 'link'
-  description: string
-  url: string
-  tags: string[]
-}
+export type ResourceCard =
+  | {
+      id: string
+      kind: 'external'
+      title: string
+      type: 'video' | 'doc' | 'exercise' | 'experiment' | 'link'
+      description: string
+      url: string        // http:// 或 https://，渲染层可见
+      tags: string[]
+    }
+  | {
+      id: string
+      kind: 'local'
+      title: string
+      type: 'video' | 'doc' | 'exercise' | 'experiment' | 'link'
+      description: string
+      tags: string[]
+      // 无 url 字段：渲染层只知道 id，路径由主进程白名单管理
+    }
 
 export interface AgentMessage {
   role: 'user' | 'assistant'
@@ -132,11 +143,16 @@ window.electronAPI = {
 
 ### openResource 路径安全
 1. 渲染层只传 `resourceId`，不传路径
-2. 主进程查白名单资源表（Map<id, absolutePath>）
-3. `path.resolve` + `path.normalize` 规范化路径
-4. 确认最终路径在白名单目录前缀内（防路径遍历）
-5. `fs.existsSync` 验证文件存在后调用 `shell.openPath`
+2. 主进程查白名单资源表（`Map<id, absolutePath>`）；MVP 阶段该表在 `main.ts` 中硬编码初始化，后续可从配置文件加载
+3. `path.resolve` + `path.normalize` 规范化路径得到 `targetPath`
+4. 路径遍历检查：`path.relative(baseDir, targetPath)` 的结果不得以 `..` 开头，也不得是绝对路径（即结果不得包含 `path.sep` 为首的部分）；如需防 symlink，对 `targetPath` 额外调用 `fs.realpathSync` 后重新校验
+5. `fs.existsSync` 验证文件存在后调用 `shell.openPath`（用默认程序打开资源文件）
 6. 非法路径 → `RESOURCE_NOT_ALLOWED`；文件不存在 → `RESOURCE_NOT_FOUND`
+
+### ResourceCard 打开方式判断（渲染层）
+组件根据 `kind` 字段决定调用哪个 preload API，不读取路径：
+- `kind === 'external'` → `openExternal(card.url)`
+- `kind === 'local'` → `openResource(card.id)`
 
 ---
 
@@ -245,7 +261,7 @@ ResizeObserver 监听内容根节点高度，变化时调用 `preload.resizeWind
 - [ ] 数字人进入 thinking 状态，随后 talking 状态，最终回到 idle
 - [ ] 资源卡片在数字人下方推送展示
 - [ ] 点击外部链接卡片，浏览器打开正确网址
-- [ ] 点击本地资源卡片，文件管理器打开对应文件
+- [ ] 点击本地资源卡片，系统用默认程序打开对应文件（shell.openPath）
 - [ ] 手动关闭单张卡片，其余卡片保留
 - [ ] 再次提交，新资源卡片替换旧卡片
 - [ ] 模拟 AI 失败（MockAIProvider 抛错），显示 error 状态和重试按钮
