@@ -1,4 +1,3 @@
-import { useRef } from 'react'
 import { useAgentStore } from '../../store/agentStore'
 import { useAI } from '../../hooks/useAI'
 import styles from './InputBar.module.css'
@@ -10,7 +9,6 @@ export function InputBar() {
   const error = useAgentStore(state => state.error)
   const isLoading = useAgentStore(state => state.isLoading)
   const { sendMessage, retry } = useAI()
-  const inputRef = useRef<HTMLTextAreaElement>(null)
 
   function handleSubmit() {
     const text = inputText.trim()
@@ -39,7 +37,6 @@ export function InputBar() {
 
       <div className={styles.row}>
         <textarea
-          ref={inputRef}
           className={styles.input}
           placeholder="问我任何物理问题…"
           value={inputText}

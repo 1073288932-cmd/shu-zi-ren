@@ -17,8 +17,7 @@ interface ResourceCardProps {
 export function ResourceCard({ card }: ResourceCardProps) {
   const removeResourceCard = useAgentStore(state => state.removeResourceCard)
 
-  async function handleOpen(e: React.MouseEvent) {
-    e.stopPropagation()
+  async function handleOpen() {
     if (card.kind === 'external') {
       const err = await window.electronAPI.openExternal(card.url)
       if (err) console.error('openExternal error:', err)
@@ -34,7 +33,15 @@ export function ResourceCard({ card }: ResourceCardProps) {
   }
 
   return (
-    <div className={styles.card} onClick={handleOpen} role="button" tabIndex={0}>
+    <div
+      className={styles.card}
+      onClick={handleOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') handleOpen()
+      }}
+      role="button"
+      tabIndex={0}
+    >
       <span className={styles.icon}>{TYPE_ICONS[card.type] ?? '📎'}</span>
 
       <div className={styles.body}>
