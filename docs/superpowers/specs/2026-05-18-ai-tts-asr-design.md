@@ -1,7 +1,7 @@
 # 教学智能体 AI + TTS/ASR 接入 — Design Doc
 
 Date: 2026-05-18
-Status: In Review
+Status: Approved
 
 ---
 
