@@ -31,11 +31,9 @@ export function InputBar() {
       {mood === 'error' && error && (
         <div className={styles.retryRow}>
           <span className={styles.errorText}>{error.message}</span>
-          {error.recoverable && (
-            <button className={styles.retryBtn} onClick={retry}>
-              重试
-            </button>
-          )}
+          <button className={styles.retryBtn} onClick={retry}>
+            重试
+          </button>
         </div>
       )}
 
