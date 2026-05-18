@@ -1,0 +1,113 @@
+.inputBar {
+  -webkit-app-region: no-drag;
+  padding: 8px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.input {
+  -webkit-app-region: no-drag;
+  flex: 1;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 13px;
+  padding: 7px 10px;
+  outline: none;
+  transition: border-color 0.15s;
+  resize: none;
+  height: 36px;
+  font-family: inherit;
+}
+
+.input::placeholder {
+  color: #64748b;
+}
+
+.input:focus {
+  border-color: rgba(125, 211, 252, 0.5);
+}
+
+.input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.sendBtn {
+  -webkit-app-region: no-drag;
+  width: 36px;
+  height: 36px;
+  background: #4f46e5;
+  border: none;
+  border-radius: 8px;
+  color: white;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.sendBtn:hover:not(:disabled) {
+  background: #4338ca;
+}
+
+.sendBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.micBtn {
+  -webkit-app-region: no-drag;
+  width: 36px;
+  height: 36px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #94a3b8;
+  font-size: 16px;
+  cursor: not-allowed;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.retryRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.errorText {
+  font-size: 11px;
+  color: #f87171;
+  flex: 1;
+}
+
+.retryBtn {
+  -webkit-app-region: no-drag;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 6px;
+  color: #fca5a5;
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.retryBtn:hover {
+  background: rgba(239, 68, 68, 0.25);
+}
