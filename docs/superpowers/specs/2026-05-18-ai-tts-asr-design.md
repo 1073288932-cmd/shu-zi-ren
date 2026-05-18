@@ -1,7 +1,7 @@
 # 教学智能体 AI + TTS/ASR 接入 — Design Doc
 
 Date: 2026-05-18
-Status: Approved
+Status: In Review
 
 ---
 
@@ -67,7 +67,7 @@ renderer（返回路径）
 
 | 层 | 持有 | 不可见 |
 |----|------|--------|
-| **main process** | `DEEPSEEK_API_KEY`（`process.env`）、catalog 完整数据（含本地路径）、Deepseek fetch、schema 校验、id 映射 | key 不出进程、路径不过 IPC |
+| **main process** | `DEEPSEEK_API_KEY`（`process.env`）、catalog 完整数据（不含本地路径）+ `resourceWhitelist`（本地路径）、Deepseek fetch、schema 校验、id 映射 | key 不出进程、路径不过 IPC |
 | **preload** | `ipcRenderer.invoke('chat', messages)` 封装 | 不持有 key，不传原始 ipcRenderer |
 | **renderer** | 发 `AgentMessage[]`，收 `AIResponse \| AppError`，驱动 TTS/ASR，更新 store | 不知道 key、路径、catalog 内部结构 |
 
@@ -330,6 +330,24 @@ export const ttsProvider: TTSProvider =
 
 ## Web Speech ASR（`src/services/asr/WebSpeechASRProvider.ts`）
 
+### `ASRProvider` 接口新增 `available`
+
+```ts
+interface ASRProvider {
+  readonly available: boolean     // 新增：InputBar 通过此字段决定按钮是否 disabled
+  start(): void
+  stop(): void
+  onResult(cb: (text: string, isFinal: boolean) => void): void
+  onError(cb: (code: string) => void): void
+}
+```
+
+- `WebSpeechASRProvider.available = true`
+- `NoopASRProvider.available = false`
+- InputBar 用 `asrProvider.available` 而非 `instanceof` 判断按钮可用性，后续换云端 ASR 无需改 UI
+
+### 行为
+
 - `lang: 'zh-CN'`，`interimResults: true`，`continuous: false`
 - `start()` 前先 `stop()` 旧实例，防多个 recognition 并发写 InputBar
 - `onresult`：`isFinal=true` 时调 `onResult(text, true)`；过程中调 `onResult(text, false)`
@@ -387,7 +405,7 @@ onResult(text, isFinal):
 onError(code) → setIsListening(false)
 onend（自然结束）→ setIsListening(false)
 
-ASR 不可用（NoopASRProvider）→ 按钮 disabled（保持现状）
+ASR 不可用（`asrProvider.available === false`）→ 按钮 disabled（保持现状）
 isLoading=true → 按钮 disabled
 isListening=true → 脉冲动画，点击可提前 stop
 ```
@@ -422,6 +440,31 @@ DEEPSEEK_API_KEY=
 
 ---
 
+## `DEEPSEEK_API_KEY` 加载方式
+
+Vite 的 `VITE_*` 环境变量只注入 renderer bundle，**不会**自动注入 Electron main process。main process 通过以下两种方式之一读取 key：
+
+**方式 A（推荐，开发阶段）**：在 `electron/main.ts` 顶部用 `dotenv` 加载项目根目录的 `.env`：
+
+```ts
+import dotenv from 'dotenv'
+import path from 'path'
+dotenv.config({ path: path.join(__dirname, '../../.env') })
+// 之后 process.env.DEEPSEEK_API_KEY 可用
+```
+
+需安装 `dotenv` 依赖（`npm i dotenv`）。
+
+**方式 B（CI / 生产）**：由 shell 或部署环境在启动前注入：
+
+```bash
+DEEPSEEK_API_KEY=sk-xxx npm run dev
+```
+
+**验收**：实现完成后手动验证 `process.env.DEEPSEEK_API_KEY` 在 main process 可读；如为空，handler 应返回 `AI_UNAVAILABLE`。
+
+---
+
 ## 测试覆盖
 
 ### 新增测试文件
@@ -429,7 +472,8 @@ DEEPSEEK_API_KEY=
 | 文件 | 关键用例 |
 |------|---------|
 | `tests/resourceCatalog.test.ts` | 加载合法 catalog；promptSnippet 不含 url/路径；validateLocalIds 全匹配返回空数组、缺失返回缺失列表；重复 id / external 缺 url / local 带 url / kind 非法 / type 非法 → 拒绝加载 |
-| `tests/DeepseekAIProvider.test.ts` | 合法 JSON 响应；未知 id 过滤；超 3 条截断；reply 非 string → 降级；JSON 失败 → 降级；HTTP 401 → AI_AUTH_ERROR；HTTP 429 → AI_RATE_LIMITED；超时 → handler 映射为 AI_ERROR |
+| `tests/DeepseekAIProvider.test.ts` | 合法 JSON 响应；未知 id 过滤；超 3 条截断；reply 非 string → 降级；JSON 失败 → 降级；HTTP 401 → 抛 `DeepseekHTTPError(401)`；HTTP 429 → 抛 `DeepseekHTTPError(429)`；超时 → 抛错 |
+| `tests/mapDeepseekError.test.ts` | `DeepseekHTTPError(401)` → `AI_AUTH_ERROR`；`(429)` → `AI_RATE_LIMITED`；`(500)` → `AI_ERROR`；超时/网络错误 → `AI_ERROR` |
 | `tests/validateChatMessages.test.ts` | 合法输入；非数组；length > 20；非法 role；content 超 2000 字符 |
 | `tests/WebSpeechTTSProvider.test.ts` | speak('') 直接 resolve；speak 前 cancel；onend → resolve；onerror → resolve（静默）；stop 后旧回调忽略；连续 speak 第一次 onend 忽略 |
 | `tests/WebSpeechASRProvider.test.ts` | start 前 stop 旧实例；lang=zh-CN；onresult isFinal=true → onResult(text,true)；onerror → onError；stop 调用 recognition.stop() |
@@ -477,6 +521,7 @@ src/
 tests/
   resourceCatalog.test.ts              新建
   DeepseekAIProvider.test.ts           新建
+  mapDeepseekError.test.ts             新建
   validateChatMessages.test.ts         新建
   WebSpeechTTSProvider.test.ts         新建
   WebSpeechASRProvider.test.ts         新建
