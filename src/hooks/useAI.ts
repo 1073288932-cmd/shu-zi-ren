@@ -42,6 +42,7 @@ export function useAI() {
       const duration = calcTalkingDuration(response.reply.length)
       talkingTimerRef.current = setTimeout(() => {
         useAgentStore.getState().setMood('idle')
+        useAgentStore.getState().setIsPushing(false)
         talkingTimerRef.current = null
       }, duration)
     } catch (err) {
@@ -52,6 +53,7 @@ export function useAI() {
       }
       const s = useAgentStore.getState()
       s.setMood('error')
+      s.setIsPushing(false)
       s.setError(error)
       s.setIsLoading(false)
     }
