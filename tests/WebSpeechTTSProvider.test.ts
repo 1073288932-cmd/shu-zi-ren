@@ -2,17 +2,28 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { WebSpeechTTSProvider } from '../src/services/tts/WebSpeechTTSProvider'
 
+interface MockUtterance {
+  lang: string
+  rate: number
+  voice: SpeechSynthesisVoice | null
+  onend: (() => void) | null
+  onerror: (() => void) | null
+  readonly text: string
+}
+
 describe('WebSpeechTTSProvider', () => {
-  let speakMock: ReturnType<typeof vi.fn>
-  let cancelMock: ReturnType<typeof vi.fn>
-  let getVoicesMock: ReturnType<typeof vi.fn>
-  let lastUtterance: SpeechSynthesisUtterance | null = null
+  const speakMock = vi.fn()
+  const cancelMock = vi.fn()
+  const getVoicesMock = vi.fn()
+  let lastUtterance: MockUtterance | null = null
 
   beforeEach(() => {
     lastUtterance = null
-    speakMock = vi.fn((u: SpeechSynthesisUtterance) => { lastUtterance = u })
-    cancelMock = vi.fn()
-    getVoicesMock = vi.fn(() => [])
+    speakMock.mockReset()
+    speakMock.mockImplementation((u: MockUtterance) => { lastUtterance = u })
+    cancelMock.mockReset()
+    getVoicesMock.mockReset()
+    getVoicesMock.mockReturnValue([])
 
     Object.defineProperty(window, 'speechSynthesis', {
       value: { speak: speakMock, cancel: cancelMock, getVoices: getVoicesMock },
@@ -22,7 +33,7 @@ describe('WebSpeechTTSProvider', () => {
 
     // jsdom doesn't have SpeechSynthesisUtterance — provide a minimal mock
     if (typeof SpeechSynthesisUtterance === 'undefined') {
-      ;(globalThis as any).SpeechSynthesisUtterance = class {
+      ;(globalThis as Record<string, unknown>).SpeechSynthesisUtterance = class {
         lang = ''
         rate = 1
         voice: SpeechSynthesisVoice | null = null
@@ -76,7 +87,6 @@ describe('WebSpeechTTSProvider', () => {
     const p = provider.speak('hi')
     provider.stop()
     lastUtterance!.onend!()
-    // p should never resolve — race with a short timeout
     const result = await Promise.race([
       p.then(() => 'resolved'),
       new Promise<string>(r => setTimeout(() => r('pending'), 50)),
@@ -92,8 +102,8 @@ describe('WebSpeechTTSProvider', () => {
 
   it('second speak() wins over first', async () => {
     const provider = new WebSpeechTTSProvider()
-    const utterances: SpeechSynthesisUtterance[] = []
-    speakMock.mockImplementation((u: SpeechSynthesisUtterance) => utterances.push(u))
+    const utterances: MockUtterance[] = []
+    speakMock.mockImplementation((u: MockUtterance) => utterances.push(u))
 
     const p1 = provider.speak('first')
     const p2 = provider.speak('second')
