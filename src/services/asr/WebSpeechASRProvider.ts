@@ -7,6 +7,8 @@ export class WebSpeechASRProvider implements ASRProvider {
   private resultCb: ((text: string, isFinal: boolean) => void) | null = null
   private errorCb: ((code: string) => void) | null = null
   private endCb: (() => void) | null = null
+  private lastTranscript = ''
+  private emittedFinal = false
 
   onResult(cb: (text: string, isFinal: boolean) => void): void {
     this.resultCb = cb
@@ -24,6 +26,13 @@ export class WebSpeechASRProvider implements ASRProvider {
     this.stop()
 
     const SR = window.SpeechRecognition ?? (window as Window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition
+    if (!SR) {
+      this.errorCb?.('not-supported')
+      return
+    }
+
+    this.lastTranscript = ''
+    this.emittedFinal = false
     this.recognition = new SR()
     this.recognition.lang = 'zh-CN'
     this.recognition.interimResults = true
@@ -31,8 +40,10 @@ export class WebSpeechASRProvider implements ASRProvider {
 
     this.recognition.onresult = (e: SpeechRecognitionEvent) => {
       const result = e.results[e.results.length - 1]
-      const text = result[0].transcript
+      const text = result[0].transcript.trim()
       const isFinal = result.isFinal
+      if (text) this.lastTranscript = text
+      if (isFinal) this.emittedFinal = true
       this.resultCb?.(text, isFinal)
     }
 
@@ -41,10 +52,19 @@ export class WebSpeechASRProvider implements ASRProvider {
     }
 
     this.recognition.onend = () => {
+      if (this.lastTranscript && !this.emittedFinal) {
+        this.emittedFinal = true
+        this.resultCb?.(this.lastTranscript, true)
+      }
       this.endCb?.()
     }
 
-    this.recognition.start()
+    try {
+      this.recognition.start()
+    } catch {
+      this.errorCb?.('start-failed')
+      this.recognition = null
+    }
   }
 
   stop(): void {

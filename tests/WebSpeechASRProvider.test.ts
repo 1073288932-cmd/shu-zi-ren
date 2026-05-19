@@ -112,6 +112,36 @@ describe('WebSpeechASRProvider', () => {
     expect(endCb).toHaveBeenCalled()
   })
 
+  it('promotes last interim transcript to final when recognition ends without final result', () => {
+    const provider = new WebSpeechASRProvider()
+    const resultCb = vi.fn()
+    provider.onResult(resultCb)
+    provider.start()
+
+    mockInstance.onresult?.({
+      results: [{ 0: { transcript: '摩擦力实验' }, isFinal: false }],
+    })
+    mockInstance.onend?.()
+
+    expect(resultCb).toHaveBeenCalledWith('摩擦力实验', false)
+    expect(resultCb).toHaveBeenCalledWith('摩擦力实验', true)
+  })
+
+  it('does not duplicate final transcript when final result arrived before onend', () => {
+    const provider = new WebSpeechASRProvider()
+    const resultCb = vi.fn()
+    provider.onResult(resultCb)
+    provider.start()
+
+    mockInstance.onresult?.({
+      results: [{ 0: { transcript: '摩擦力实验' }, isFinal: true }],
+    })
+    mockInstance.onend?.()
+
+    expect(resultCb).toHaveBeenCalledTimes(1)
+    expect(resultCb).toHaveBeenCalledWith('摩擦力实验', true)
+  })
+
   it('stop() calls recognition.stop() and clears instance', () => {
     const provider = new WebSpeechASRProvider()
     provider.start()
