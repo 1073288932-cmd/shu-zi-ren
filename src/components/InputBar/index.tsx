@@ -14,6 +14,9 @@ export function InputBar() {
 
   const [isListening, setIsListening] = useState(false)
   const [interimText, setInterimText] = useState('')
+  const [apiKeyInput, setApiKeyInput] = useState('')
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null)
+  const [isSavingKey, setIsSavingKey] = useState(false)
 
   useEffect(() => {
     asrProvider.onResult((text, isFinal) => {
@@ -57,11 +60,56 @@ export function InputBar() {
     }
   }
 
+  async function handleSaveApiKey() {
+    const key = apiKeyInput.trim()
+    if (!key || isSavingKey) return
+    setIsSavingKey(true)
+    setApiKeyError(null)
+    const result = await window.electronAPI.setApiKey(key)
+    setIsSavingKey(false)
+    if (result) {
+      setApiKeyError(result.message)
+    } else {
+      setApiKeyInput('')
+      retry()
+    }
+  }
+
+  function handleApiKeyKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === 'Enter') handleSaveApiKey()
+  }
+
   const displayText = isListening && interimText ? interimText : inputText
 
   return (
     <div className={styles.inputBar}>
-      {mood === 'error' && error && (
+      {mood === 'error' && error && error.code === 'AI_UNAVAILABLE' && (
+        <div className={styles.retryRow}>
+          <span className={styles.errorText}>{error.message}</span>
+          <div className={styles.apiKeyRow}>
+            <input
+              className={styles.apiKeyInput}
+              type="password"
+              placeholder="sk-…"
+              value={apiKeyInput}
+              onChange={e => setApiKeyInput(e.target.value)}
+              onKeyDown={handleApiKeyKeyDown}
+              disabled={isSavingKey}
+              aria-label="Deepseek API Key"
+            />
+            <button
+              className={styles.retryBtn}
+              onClick={handleSaveApiKey}
+              disabled={!apiKeyInput.trim() || isSavingKey}
+            >
+              {isSavingKey ? '…' : '保存'}
+            </button>
+          </div>
+          {apiKeyError && <span className={styles.errorText}>{apiKeyError}</span>}
+        </div>
+      )}
+
+      {mood === 'error' && error && error.code !== 'AI_UNAVAILABLE' && (
         <div className={styles.retryRow}>
           <span className={styles.errorText}>{error.message}</span>
           <button className={styles.retryBtn} onClick={retry}>

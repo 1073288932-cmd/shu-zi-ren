@@ -27,7 +27,20 @@ if (missingIds.length > 0) {
   console.log('[resource] catalog loaded, all local ids validated')
 }
 
-const deepseekProvider = new DeepseekAIProvider(process.env.DEEPSEEK_API_KEY ?? '')
+let apiKey = ''
+let deepseekProvider!: DeepseekAIProvider
+
+function reloadApiKey(): void {
+  apiKey = process.env.DEEPSEEK_API_KEY ?? ''
+  if (apiKey) return
+  try {
+    const configPath = path.join(app.getPath('userData'), 'config.json')
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>
+    if (typeof config.deepseekApiKey === 'string' && config.deepseekApiKey) {
+      apiKey = config.deepseekApiKey
+    }
+  } catch { /* config not found or parse error */ }
+}
 
 let mainWindow: BrowserWindow | null = null
 let maxHeight = 800
@@ -73,6 +86,9 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  reloadApiKey()
+  deepseekProvider = new DeepseekAIProvider(apiKey)
+
   // Allow microphone permission for Web Speech ASR
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
     callback(permission === 'media')
@@ -133,12 +149,31 @@ ipcMain.handle('open-resource', async (_, resourceId: string): Promise<AppError 
 })
 
 // IPC: AI chat (main-process proxied, API key never in renderer)
-const AI_UNAVAILABLE_ERROR: AppError = { code: 'AI_UNAVAILABLE', message: 'AI service not configured. Set DEEPSEEK_API_KEY.', recoverable: false }
+const AI_UNAVAILABLE_ERROR: AppError = { code: 'AI_UNAVAILABLE', message: 'AI 服务未配置，请在下方输入 Deepseek API Key', recoverable: false }
 const AI_ERROR: AppError = { code: 'AI_ERROR', message: 'Internal error', recoverable: true }
+
+// IPC: save API key to userData config
+ipcMain.handle('set-api-key', async (event, key: unknown): Promise<AppError | undefined> => {
+  if (!BrowserWindow.fromWebContents(event.sender)) return AI_ERROR
+  if (typeof key !== 'string' || !key.trim()) {
+    return { code: 'AI_AUTH_ERROR', message: '请输入有效的 API Key', recoverable: true }
+  }
+  const configPath = path.join(app.getPath('userData'), 'config.json')
+  try {
+    let existing: Record<string, unknown> = {}
+    try { existing = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown> } catch { /* first time */ }
+    fs.writeFileSync(configPath, JSON.stringify({ ...existing, deepseekApiKey: key.trim() }, null, 2), 'utf-8')
+    reloadApiKey()
+    deepseekProvider = new DeepseekAIProvider(apiKey)
+    return undefined
+  } catch {
+    return { code: 'AI_ERROR', message: '保存 API Key 失败，请检查应用权限', recoverable: true }
+  }
+})
 
 ipcMain.handle('chat', async (event, messages: unknown) => {
   if (!BrowserWindow.fromWebContents(event.sender)) return AI_ERROR
-  if (!process.env.DEEPSEEK_API_KEY) return AI_UNAVAILABLE_ERROR
+  if (!apiKey) return AI_UNAVAILABLE_ERROR
   const validated = validateChatMessages(messages)
   if ('code' in validated) return validated
   try {

@@ -29,4 +29,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }
     return ipcRenderer.invoke('chat', messages)
   },
+
+  setApiKey(key: string): Promise<AppError | undefined> {
+    return ipcRenderer.invoke('set-api-key', key)
+  },
 })

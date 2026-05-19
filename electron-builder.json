@@ -6,7 +6,8 @@
   },
   "files": [
     "dist/**/*",
-    "dist-electron/**/*"
+    "dist-electron/**/*",
+    "resources/**/*"
   ],
   "mac": {
     "category": "public.app-category.education",

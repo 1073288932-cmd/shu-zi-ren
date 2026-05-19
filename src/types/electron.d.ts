@@ -8,6 +8,7 @@ declare global {
       openResource(resourceId: string): Promise<AppError | undefined>
       onError(cb: (err: AppError) => void): () => void
       chat(messages: AgentMessage[]): Promise<AIResponse | AppError>
+      setApiKey(key: string): Promise<AppError | undefined>
     }
   }
 }
