@@ -26,6 +26,7 @@
     "electron": "^28.3.3",
     "electron-builder": "^24.13.3",
     "happy-dom": "^14.12.3",
+    "jsdom": "^29.1.1",
     "typescript": "^5.5.4",
     "vite": "^5.4.0",
     "vite-plugin-electron": "^0.28.7",

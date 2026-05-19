@@ -1,5 +1,11 @@
-import type { TTSProvider } from './TTSProvider'
 import { NoopTTSProvider } from './NoopTTSProvider'
+import { WebSpeechTTSProvider } from './WebSpeechTTSProvider'
+import type { TTSProvider } from './TTSProvider'
 
-// WebSpeechTTSProvider is created in Task 8 and replaces this placeholder
-export const ttsProvider: TTSProvider = new NoopTTSProvider()
+export const ttsProvider: TTSProvider =
+  typeof window !== 'undefined' && 'speechSynthesis' in window
+    ? new WebSpeechTTSProvider()
+    : new NoopTTSProvider()
+
+export { NoopTTSProvider, WebSpeechTTSProvider }
+export type { TTSProvider }
