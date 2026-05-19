@@ -1,5 +1,7 @@
+import { useState, useEffect } from 'react'
 import { useAgentStore } from '../../store/agentStore'
 import { useAI } from '../../hooks/useAI'
+import { asrProvider } from '../../services/asr'
 import styles from './InputBar.module.css'
 
 export function InputBar() {
@@ -9,6 +11,26 @@ export function InputBar() {
   const error = useAgentStore(state => state.error)
   const isLoading = useAgentStore(state => state.isLoading)
   const { sendMessage, retry } = useAI()
+
+  const [isListening, setIsListening] = useState(false)
+  const [interimText, setInterimText] = useState('')
+
+  useEffect(() => {
+    asrProvider.onResult((text, isFinal) => {
+      setInterimText(text)
+      if (isFinal && text.trim()) {
+        sendMessage(text.trim())
+        setIsListening(false)
+        setInterimText('')
+      }
+    })
+    asrProvider.onError(() => {
+      setIsListening(false)
+    })
+    asrProvider.onEnd(() => {
+      setIsListening(false)
+    })
+  }, [sendMessage])
 
   function handleSubmit() {
     const text = inputText.trim()
@@ -24,6 +46,19 @@ export function InputBar() {
     }
   }
 
+  function handleMic() {
+    if (isListening) {
+      asrProvider.stop()
+      setIsListening(false)
+      setInterimText('')
+    } else {
+      asrProvider.start()
+      setIsListening(true)
+    }
+  }
+
+  const displayText = isListening && interimText ? interimText : inputText
+
   return (
     <div className={styles.inputBar}>
       {mood === 'error' && error && (
@@ -38,19 +73,20 @@ export function InputBar() {
       <div className={styles.row}>
         <textarea
           className={styles.input}
-          placeholder="问我任何物理问题…"
-          value={inputText}
-          onChange={e => setInputText(e.target.value)}
+          placeholder={isListening ? '正在聆听…' : '问我任何物理问题…'}
+          value={displayText}
+          onChange={e => { if (!isListening) setInputText(e.target.value) }}
           onKeyDown={handleKeyDown}
           disabled={isLoading}
           rows={1}
         />
 
         <button
-          className={styles.micBtn}
-          disabled
-          title="语音输入（即将支持）"
-          aria-label="语音输入（暂未开放）"
+          className={`${styles.micBtn}${isListening ? ` ${styles.micBtnActive}` : ''}`}
+          onClick={handleMic}
+          disabled={!asrProvider.available || isLoading}
+          title={asrProvider.available ? (isListening ? '停止录音' : '语音输入') : '语音输入（不支持）'}
+          aria-label={isListening ? '停止录音' : '语音输入'}
         >
           🎙
         </button>
