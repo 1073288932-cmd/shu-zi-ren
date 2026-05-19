@@ -1,5 +1,4 @@
 import type { AIProvider } from './AIProvider'
-import { MockAIProvider } from './MockAIProvider'
+import { ElectronAIProvider } from './ElectronAIProvider'
 
-// Swap MockAIProvider for a real implementation when ready
-export const aiProvider: AIProvider = new MockAIProvider()
+export const aiProvider: AIProvider = new ElectronAIProvider()
