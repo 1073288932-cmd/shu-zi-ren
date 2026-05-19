@@ -107,4 +107,31 @@ describe('DeepseekAIProvider', () => {
       provider.chat([{ role: 'user', content: 'test' }], mockCatalog)
     ).rejects.toThrow('network failure')
   })
+
+  it('sends correct Authorization header, URL, and response_format', async () => {
+    const mockFetch = vi.fn().mockResolvedValue(
+      makeFetchResponse(JSON.stringify({ reply: 'ok', resourceIds: [] }))
+    )
+    vi.stubGlobal('fetch', mockFetch)
+
+    await provider.chat([{ role: 'user', content: 'test' }], mockCatalog)
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      'https://api.deepseek.com/chat/completions',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer test-api-key',
+          'Content-Type': 'application/json',
+        }),
+      })
+    )
+
+    // Verify response_format is in the body
+    const callArgs = mockFetch.mock.calls[0]
+    const body = JSON.parse(callArgs[1].body)
+    expect(body.model).toBe('deepseek-chat')
+    expect(body.response_format).toEqual({ type: 'json_object' })
+    expect(body.messages[0].role).toBe('system')
+  })
 })
