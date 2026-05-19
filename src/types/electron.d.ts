@@ -1,4 +1,4 @@
-import type { AppError } from '@shared/types'
+import type { AppError, AIResponse, AgentMessage } from '@shared/types'
 
 declare global {
   interface Window {
@@ -7,6 +7,7 @@ declare global {
       openExternal(url: string): Promise<AppError | undefined>
       openResource(resourceId: string): Promise<AppError | undefined>
       onError(cb: (err: AppError) => void): () => void
+      chat(messages: AgentMessage[]): Promise<AIResponse | AppError>
     }
   }
 }

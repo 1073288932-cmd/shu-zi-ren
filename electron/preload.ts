@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppError } from '../shared/types'
+import type { AppError, AIResponse, AgentMessage } from '../shared/types'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   resizeWindow(height: number): void {
@@ -18,5 +18,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (_: unknown, err: AppError) => cb(err)
     ipcRenderer.on('app-error', handler)
     return () => ipcRenderer.removeListener('app-error', handler)
+  },
+
+  chat(messages: unknown): Promise<AIResponse | AppError> {
+    if (!Array.isArray(messages)) {
+      return Promise.resolve({ code: 'INVALID_CHAT_MESSAGES', message: 'Messages must be an array', recoverable: false })
+    }
+    if (messages.length > 20) {
+      return Promise.resolve({ code: 'INVALID_CHAT_MESSAGES', message: 'Too many messages (max 20)', recoverable: false })
+    }
+    return ipcRenderer.invoke('chat', messages)
   },
 })
