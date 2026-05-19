@@ -26,11 +26,20 @@ vi.mock('../src/services/ai', () => ({
   aiProvider: { chat: mockChat },
 }))
 
+const mockSpeak = vi.hoisted(() => vi.fn())
+const mockStop = vi.hoisted(() => vi.fn())
+
+vi.mock('../src/services/tts', () => ({
+  ttsProvider: { speak: mockSpeak, stop: mockStop },
+}))
+
 describe('useAI', () => {
   beforeEach(() => {
     mockChat.mockResolvedValue(mockResponse)
     vi.useFakeTimers()
     useAgentStore.setState(initialState)
+    mockSpeak.mockReturnValue(new Promise<void>(() => {}))  // pending by default
+    mockStop.mockReset()
   })
 
   afterEach(() => {
@@ -55,7 +64,10 @@ describe('useAI', () => {
     expect(useAgentStore.getState().isPushing).toBe(true)
   })
 
-  it('mood returns to idle after talking duration', async () => {
+  it('mood returns to idle after talking duration (TTS resolves)', async () => {
+    let resolveTts!: () => void
+    mockSpeak.mockReturnValue(new Promise<void>(r => { resolveTts = r }))
+
     const { result } = renderHook(() => useAI())
 
     await act(async () => {
@@ -65,7 +77,7 @@ describe('useAI', () => {
 
     expect(useAgentStore.getState().mood).toBe('talking')
 
-    act(() => { vi.runAllTimers() })
+    await act(async () => { resolveTts() })
 
     expect(useAgentStore.getState().mood).toBe('idle')
   })
@@ -117,31 +129,107 @@ describe('useAI', () => {
     expect(useAgentStore.getState().mood).toBe('talking')
   })
 
-  it('clears old talking timer when new request starts', async () => {
+  it('new request increments gen so first TTS resolve is ignored', async () => {
+    let resolveFirst!: () => void
+    mockSpeak
+      .mockReturnValueOnce(new Promise<void>(r => { resolveFirst = r }))
+      .mockReturnValue(new Promise<void>(() => {}))
+
     const { result } = renderHook(() => useAI())
 
-    // First request completes
     await act(async () => {
       result.current.sendMessage('first')
       await vi.runAllTicks()
     })
-    expect(useAgentStore.getState().mood).toBe('talking')
 
-    // Advance partway into first talking timer
-    act(() => { vi.advanceTimersByTime(500) })
-
-    // Reset isLoading to allow second send
     useAgentStore.setState({ isLoading: false })
 
-    // Second request — should clear first timer
     await act(async () => {
       result.current.sendMessage('second')
       await vi.runAllTicks()
     })
+
     expect(useAgentStore.getState().mood).toBe('talking')
 
-    // Run all remaining timers — only second timer should fire
-    act(() => { vi.runAllTimers() })
+    await act(async () => { resolveFirst() })
+
+    expect(useAgentStore.getState().mood).toBe('talking')
+  })
+
+  it('mood returns to idle after ttsProvider.speak() resolves', async () => {
+    let resolveTts!: () => void
+    mockSpeak.mockReturnValue(new Promise<void>(r => { resolveTts = r }))
+
+    const { result } = renderHook(() => useAI())
+
+    await act(async () => {
+      result.current.sendMessage('test')
+      await vi.runAllTicks()
+    })
+
+    expect(useAgentStore.getState().mood).toBe('talking')
+
+    await act(async () => { resolveTts() })
+
     expect(useAgentStore.getState().mood).toBe('idle')
+    expect(useAgentStore.getState().isPushing).toBe(false)
+  })
+
+  it('new request calls ttsProvider.stop() before chat', async () => {
+    const { result } = renderHook(() => useAI())
+
+    await act(async () => {
+      result.current.sendMessage('first')
+      await vi.runAllTicks()
+    })
+
+    useAgentStore.setState({ isLoading: false })
+
+    await act(async () => {
+      result.current.sendMessage('second')
+      await vi.runAllTicks()
+    })
+
+    expect(mockStop).toHaveBeenCalledTimes(2)
+  })
+
+  it('old gen TTS resolve does not change mood after new request starts', async () => {
+    let resolveFirst!: () => void
+    mockSpeak
+      .mockReturnValueOnce(new Promise<void>(r => { resolveFirst = r }))
+      .mockReturnValue(new Promise<void>(() => {}))
+
+    const { result } = renderHook(() => useAI())
+
+    await act(async () => {
+      result.current.sendMessage('first')
+      await vi.runAllTicks()
+    })
+
+    useAgentStore.setState({ isLoading: false })
+
+    await act(async () => {
+      result.current.sendMessage('second')
+      await vi.runAllTicks()
+    })
+
+    expect(useAgentStore.getState().mood).toBe('talking')
+
+    await act(async () => { resolveFirst() })
+
+    expect(useAgentStore.getState().mood).toBe('talking')
+  })
+
+  it('catch path calls ttsProvider.stop()', async () => {
+    mockChat.mockRejectedValue(new Error('network error'))
+    const { result } = renderHook(() => useAI())
+
+    await act(async () => {
+      result.current.sendMessage('test')
+      await vi.runAllTicks()
+    })
+
+    expect(mockStop).toHaveBeenCalled()
+    expect(useAgentStore.getState().mood).toBe('error')
   })
 })

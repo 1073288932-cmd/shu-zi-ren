@@ -1,26 +1,18 @@
 import { useCallback, useRef } from 'react'
 import { useAgentStore } from '../store/agentStore'
 import { aiProvider } from '../services/ai'
+import { ttsProvider } from '../services/tts'
+import { isAppError } from '../services/ai/ElectronAIProvider'
 import type { AppError } from '@shared/types'
 
-function calcTalkingDuration(replyLength: number): number {
-  return Math.min(1500 + replyLength * 40, 8000)
-}
-
 export function useAI() {
-  const talkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const clearTalkingTimer = () => {
-    if (talkingTimerRef.current !== null) {
-      clearTimeout(talkingTimerRef.current)
-      talkingTimerRef.current = null
-    }
-  }
+  const ttsGenRef = useRef(0)
 
   const sendMessage = useCallback(async (text: string) => {
     if (useAgentStore.getState().isLoading) return
 
-    clearTalkingTimer()
+    ttsGenRef.current++
+    ttsProvider.stop()
 
     const store = useAgentStore.getState()
     store.setLastUserInput(text)
@@ -39,22 +31,22 @@ export function useAI() {
       s.setMood('talking')
       s.setIsLoading(false)
 
-      const duration = calcTalkingDuration(response.reply.length)
-      talkingTimerRef.current = setTimeout(() => {
-        useAgentStore.getState().setMood('idle')
-        useAgentStore.getState().setIsPushing(false)
-        talkingTimerRef.current = null
-      }, duration)
-    } catch (err) {
-      const error: AppError = {
-        code: 'AI_ERROR',
-        message: err instanceof Error ? err.message : String(err),
-        recoverable: true,
-      }
+      const myGen = ttsGenRef.current
+      ttsProvider.speak(response.reply).then(() => {
+        if (ttsGenRef.current === myGen) {
+          useAgentStore.getState().setMood('idle')
+          useAgentStore.getState().setIsPushing(false)
+        }
+      })
+    } catch (err: unknown) {
+      const appError: AppError = isAppError(err)
+        ? (err as AppError)
+        : { code: 'AI_ERROR', message: err instanceof Error ? err.message : String(err), recoverable: true }
+      ttsProvider.stop()
       const s = useAgentStore.getState()
       s.setMood('error')
       s.setIsPushing(false)
-      s.setError(error)
+      s.setError(appError)
       s.setIsLoading(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
