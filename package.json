@@ -11,15 +11,16 @@
     "package": "vite build && electron-builder"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^4.5.4"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.0.0",
     "@types/node": "^20.14.12",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
-    "@testing-library/react": "^16.0.0",
     "@vitejs/plugin-react": "^4.3.1",
     "@vitest/coverage-v8": "^1.6.0",
     "electron": "^28.3.3",
