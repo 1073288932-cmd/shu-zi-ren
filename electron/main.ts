@@ -74,8 +74,8 @@ function createWindow() {
 
 app.whenReady().then(() => {
   // Allow microphone permission for Web Speech ASR
-  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
-    callback(permission === 'media' || permission === 'microphone')
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'media')
   })
   createWindow()
 })

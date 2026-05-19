@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { AppError, AIResponse, AgentMessage } from '../shared/types'
+import type { AppError, AIResponse } from '../shared/types'
 
 contextBridge.exposeInMainWorld('electronAPI', {
   resizeWindow(height: number): void {
