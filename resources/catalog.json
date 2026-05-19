@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "resources": [
+    {
+      "id": "res-ext-001",
+      "kind": "external",
+      "title": "摩擦力 PhET 模拟实验",
+      "type": "video",
+      "description": "可交互的摩擦力演示，适合课堂导入",
+      "url": "https://phet.colorado.edu/sims/html/friction/latest/friction_zh_CN.html",
+      "tags": ["摩擦力", "实验", "八年级"]
+    },
+    {
+      "id": "res-ext-002",
+      "kind": "external",
+      "title": "课堂导入案例",
+      "type": "link",
+      "description": "滑动摩擦力的生活化引入设计",
+      "url": "https://example.com/friction-intro",
+      "tags": ["备课", "导入", "摩擦力"]
+    },
+    {
+      "id": "res-local-001",
+      "kind": "local",
+      "title": "苏科版物理八年级下册",
+      "type": "doc",
+      "description": "苏科版教材，含摩擦力、压强等章节",
+      "tags": ["教材", "八年级下"]
+    }
+  ]
+}
