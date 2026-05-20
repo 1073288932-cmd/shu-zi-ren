@@ -97,8 +97,16 @@ describe('mapASRError', () => {
     expect(mapASRError(new ASRTimeoutError()).code).toBe('ASR_TIMEOUT')
   })
 
-  it('maps ASRHTTPError to its embedded code', () => {
-    expect(mapASRError(new ASRHTTPError(500, 'ASR_ERROR')).code).toBe('ASR_ERROR')
+  it('maps ASRHTTPError(401) to ASR_AUTH_ERROR with recoverable: false', () => {
+    const err = mapASRError(new ASRHTTPError(401, 'ASR_AUTH_ERROR'))
+    expect(err.code).toBe('ASR_AUTH_ERROR')
+    expect(err.recoverable).toBe(false)
+  })
+
+  it('maps ASRHTTPError(500) to ASR_ERROR with recoverable: true', () => {
+    const err = mapASRError(new ASRHTTPError(500, 'ASR_ERROR'))
+    expect(err.code).toBe('ASR_ERROR')
+    expect(err.recoverable).toBe(true)
   })
 
   it('maps unknown errors to ASR_ERROR', () => {
@@ -183,6 +191,9 @@ export function mapASRError(err: unknown): AppError {
     return { code: 'ASR_TIMEOUT', message: '转写超时，请重试', recoverable: true }
   }
   if (err instanceof ASRHTTPError) {
+    if (err.code === 'ASR_AUTH_ERROR') {
+      return { code: 'ASR_AUTH_ERROR', message: '语音识别配置无效', recoverable: false }
+    }
     return { code: err.code, message: '转写失败，请重试', recoverable: true }
   }
   return { code: 'ASR_ERROR', message: '转写失败，请重试', recoverable: true }
@@ -195,7 +206,7 @@ export function mapASRError(err: unknown): AppError {
 npx vitest run tests/SiliconFlowWhisperService.test.ts
 ```
 
-Expected: 7 tests pass
+Expected: 8 tests pass
 
 - [ ] **Step 5: Commit**
 
@@ -420,6 +431,7 @@ import type { AppError } from '../shared/types'
 type MockRecorder = {
   start: ReturnType<typeof vi.fn>
   stop: ReturnType<typeof vi.fn>
+  mimeType: string
   ondataavailable: ((e: { data: Blob }) => void) | null
   onstop: (() => void) | null
 }
@@ -429,11 +441,14 @@ const MockMediaRecorder = vi.fn().mockImplementation(() => {
   mockRecorderInstance = {
     start: vi.fn(),
     stop: vi.fn(),
+    mimeType: 'audio/webm;codecs=opus',
     ondataavailable: null,
     onstop: null,
   }
   return mockRecorderInstance
 })
+// Static method — checked by selectMimeType() inside RecorderASRProvider
+;(MockMediaRecorder as unknown as Record<string, unknown>).isTypeSupported = vi.fn().mockReturnValue(true)
 
 const mockTrackStop = vi.fn()
 const mockStream = { getTracks: () => [{ stop: mockTrackStop }] }
@@ -472,9 +487,16 @@ async function triggerOnstoAndWait() {
 // --- Tests ---
 
 describe('RecorderASRProvider', () => {
-  it('available is true when navigator.mediaDevices is defined', () => {
+  it('available is true when navigator.mediaDevices.getUserMedia and MediaRecorder both exist', () => {
     const provider = new RecorderASRProvider()
     expect(provider.available).toBe(true)
+  })
+
+  it('available is false when MediaRecorder is not defined', () => {
+    vi.stubGlobal('MediaRecorder', undefined)
+    const provider = new RecorderASRProvider()
+    expect(provider.available).toBe(false)
+    vi.stubGlobal('MediaRecorder', MockMediaRecorder)
   })
 
   it('normal flow: onResult(text, true) then onEnd called, status → idle', async () => {
@@ -603,6 +625,27 @@ describe('RecorderASRProvider', () => {
     expect(MockMediaRecorder).toHaveBeenCalledTimes(1)
   })
 
+  it('recorder.start() throws → stream tracks stopped, onError(start-failed)', async () => {
+    MockMediaRecorder.mockImplementationOnce(() => {
+      mockRecorderInstance = {
+        start: vi.fn().mockImplementation(() => { throw new Error('not supported') }),
+        stop: vi.fn(),
+        mimeType: 'audio/webm',
+        ondataavailable: null,
+        onstop: null,
+      }
+      return mockRecorderInstance
+    })
+    const provider = new RecorderASRProvider()
+    const errorCb = vi.fn()
+    provider.onError(errorCb)
+
+    await startAndWait(provider)
+
+    expect(mockTrackStop).toHaveBeenCalled()
+    expect(errorCb).toHaveBeenCalledWith('start-failed')
+  })
+
   it('15s timeout automatically calls stop()', async () => {
     vi.useFakeTimers()
     const provider = new RecorderASRProvider()
@@ -641,10 +684,22 @@ function isAppError(v: unknown): v is AppError {
   return typeof v === 'object' && v !== null && 'code' in v
 }
 
+function selectMimeType(): string {
+  for (const mime of ['audio/webm;codecs=opus', 'audio/webm']) {
+    if (typeof MediaRecorder !== 'undefined' &&
+        typeof MediaRecorder.isTypeSupported === 'function' &&
+        MediaRecorder.isTypeSupported(mime)) {
+      return mime
+    }
+  }
+  return ''
+}
+
 export class RecorderASRProvider implements ASRProvider {
   private status: ASRStatus = 'idle'
   private recorder: MediaRecorder | null = null
   private stream: MediaStream | null = null
+  private mimeType = ''
   private chunks: Blob[] = []
   private timeoutId: ReturnType<typeof setTimeout> | null = null
   private resultCb: ((text: string, isFinal: boolean) => void) | null = null
@@ -652,7 +707,9 @@ export class RecorderASRProvider implements ASRProvider {
   private endCb: (() => void) | null = null
 
   readonly available: boolean =
-    typeof navigator !== 'undefined' && typeof navigator.mediaDevices !== 'undefined'
+    typeof navigator !== 'undefined' &&
+    typeof navigator.mediaDevices?.getUserMedia === 'function' &&
+    typeof MediaRecorder !== 'undefined'
 
   onResult(cb: (text: string, isFinal: boolean) => void): void { this.resultCb = cb }
   onError(cb: (code: string) => void): void { this.errorCb = cb }
@@ -665,18 +722,28 @@ export class RecorderASRProvider implements ASRProvider {
 
     navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
       this.stream = stream
-      this.recorder = new MediaRecorder(stream)
+      try {
+        const mimeType = selectMimeType()
+        this.recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined)
+        this.mimeType = this.recorder.mimeType
 
-      this.recorder.ondataavailable = (e: BlobEvent) => {
-        if (e.data.size > 0) this.chunks.push(e.data)
+        this.recorder.ondataavailable = (e: BlobEvent) => {
+          if (e.data.size > 0) this.chunks.push(e.data)
+        }
+
+        this.recorder.onstop = () => { void this.handleStop() }
+
+        this.recorder.start()
+        this.status = 'recording'
+
+        this.timeoutId = setTimeout(() => { this.stop() }, 15_000)
+      } catch {
+        stream.getTracks().forEach(t => t.stop())
+        this.stream = null
+        this.recorder = null
+        this.status = 'idle'
+        this.errorCb?.('start-failed')
       }
-
-      this.recorder.onstop = () => { void this.handleStop() }
-
-      this.recorder.start()
-      this.status = 'recording'
-
-      this.timeoutId = setTimeout(() => { this.stop() }, 15_000)
     }).catch(() => {
       this.status = 'idle'
       this.errorCb?.('permission-denied')
@@ -691,7 +758,7 @@ export class RecorderASRProvider implements ASRProvider {
 
   private async handleStop(): Promise<void> {
     try {
-      const blob = new Blob(this.chunks, { type: 'audio/webm' })
+      const blob = new Blob(this.chunks, { type: this.mimeType || 'audio/webm' })
       const buffer = await blob.arrayBuffer()
 
       if (buffer.byteLength === 0) {
@@ -743,7 +810,9 @@ import { RecorderASRProvider } from './RecorderASRProvider'
 import { NoopASRProvider } from './NoopASRProvider'
 
 export const asrProvider: ASRProvider =
-  typeof navigator !== 'undefined' && typeof navigator.mediaDevices !== 'undefined'
+  typeof navigator !== 'undefined' &&
+  typeof navigator.mediaDevices?.getUserMedia === 'function' &&
+  typeof MediaRecorder !== 'undefined'
     ? new RecorderASRProvider()
     : new NoopASRProvider()
 ```
@@ -754,7 +823,7 @@ export const asrProvider: ASRProvider =
 npx vitest run tests/RecorderASRProvider.test.ts
 ```
 
-Expected: 10 tests pass
+Expected: 13 tests pass
 
 - [ ] **Step 6: Run full test suite**
 
@@ -888,7 +957,7 @@ After all 5 tasks complete:
 npx vitest run
 ```
 
-Expected output: all tests pass, count increases by at least 25 (7 + 8 + 10 new tests)
+Expected output: all tests pass, count increases by at least 29 (8 + 8 + 13 new tests)
 
 ```bash
 npx tsc --noEmit
