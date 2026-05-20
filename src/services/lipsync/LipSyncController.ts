@@ -43,7 +43,8 @@ export class LipSyncController {
     this.segments = segmentText(text)
     this.segIdx = 0
     this.remainingPauseFrames = 0
-    if (this.segments.length === 0) return
+    const hasSpeaking = this.segments.some(s => s.type === 'cjk' || s.type === 'ascii')
+    if (!hasSpeaking) return
     this.intervalId = setInterval(() => this._tick(), INTERVAL)
   }
 
@@ -74,7 +75,7 @@ export class LipSyncController {
     const maxIntensity = seg.type === 'cjk' ? CJK_MAX_INTENSITY : ASCII_MAX_INTENSITY
 
     // Deterministic variation: avoids mechanical repetition without true randomness
-    const shapeIdx = (this.segIdx * 3 + (this.segIdx >> 2)) % shapes.length
+    const shapeIdx = (this.segIdx * 2 + (this.segIdx >> 3)) % shapes.length
     const intensityVariation = 0.7 + 0.3 * Math.abs(Math.sin(this.segIdx * 0.618))
     const intensity = Math.min(1, maxIntensity * intensityVariation)
 
