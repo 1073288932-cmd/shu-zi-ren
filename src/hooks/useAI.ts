@@ -14,6 +14,7 @@ export function useAI() {
 
     ttsGenRef.current++
     ttsProvider.stop()
+    lipSyncController.stop()
 
     const store = useAgentStore.getState()
     store.setLastUserInput(text)
@@ -57,6 +58,7 @@ export function useAI() {
         ? (err as AppError)
         : { code: 'AI_ERROR', message: err instanceof Error ? err.message : String(err), recoverable: true }
       ttsProvider.stop()
+      lipSyncController.stop()
       const s = useAgentStore.getState()
       s.setMood('error')
       s.setIsPushing(false)

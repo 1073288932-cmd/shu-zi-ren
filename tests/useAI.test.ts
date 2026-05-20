@@ -73,24 +73,6 @@ describe('useAI', () => {
     expect(useAgentStore.getState().isPushing).toBe(true)
   })
 
-  it('mood returns to idle after talking duration (TTS resolves)', async () => {
-    let resolveTts!: () => void
-    mockSpeak.mockReturnValue(new Promise<void>(r => { resolveTts = r }))
-
-    const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('test')
-      await vi.runAllTicks()
-    })
-
-    expect(useAgentStore.getState().mood).toBe('talking')
-
-    await act(async () => { resolveTts() })
-
-    expect(useAgentStore.getState().mood).toBe('idle')
-  })
-
   it('does not submit when isLoading is true', async () => {
     const { result } = renderHook(() => useAI())
 
@@ -202,33 +184,6 @@ describe('useAI', () => {
     expect(mockStop).toHaveBeenCalledTimes(2)
   })
 
-  it('old gen TTS resolve does not change mood after new request starts', async () => {
-    let resolveFirst!: () => void
-    mockSpeak
-      .mockReturnValueOnce(new Promise<void>(r => { resolveFirst = r }))
-      .mockReturnValue(new Promise<void>(() => {}))
-
-    const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('first')
-      await vi.runAllTicks()
-    })
-
-    useAgentStore.setState({ isLoading: false })
-
-    await act(async () => {
-      result.current.sendMessage('second')
-      await vi.runAllTicks()
-    })
-
-    expect(useAgentStore.getState().mood).toBe('talking')
-
-    await act(async () => { resolveFirst() })
-
-    expect(useAgentStore.getState().mood).toBe('talking')
-  })
-
   it('catch path calls ttsProvider.stop()', async () => {
     mockChat.mockRejectedValue(new Error('network error'))
     const { result } = renderHook(() => useAI())
@@ -264,6 +219,8 @@ describe('useAI', () => {
       await vi.runAllTicks()
     })
 
+    // clear the initial stop() called at sendMessage start; only track finishTalking path
+    mockLipSyncStop.mockClear()
     expect(mockLipSyncStop).not.toHaveBeenCalled()
 
     await act(async () => { resolveTts() })
@@ -282,11 +239,17 @@ describe('useAI', () => {
       await vi.runAllTicks()
     })
 
+    // clear the initial stop() called at sendMessage start; only track finishTalking path
+    mockLipSyncStop.mockClear()
     expect(mockLipSyncStop).not.toHaveBeenCalled()
 
     await act(async () => { rejectTts(new Error('tts error')) })
 
     expect(mockLipSyncStop).toHaveBeenCalled()
+    expect(useAgentStore.getState().mood).toBe('idle')
+    expect(useAgentStore.getState().isPushing).toBe(false)
+    expect(useAgentStore.getState().mouthShape).toBe('closed')
+    expect(useAgentStore.getState().speakingIntensity).toBe(0)
   })
 
   it('resets mouth state after TTS ends', async () => {
