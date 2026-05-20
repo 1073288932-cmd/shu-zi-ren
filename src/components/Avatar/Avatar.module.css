@@ -105,7 +105,8 @@
   50%       { transform: translateY(-5px); }
 }
 
-.avatar[data-mood="thinking"] .characterWrap {
+.avatar[data-mood="thinking"] .characterWrap,
+.thinking {
   animation: thinking-pulse 0.9s ease-in-out infinite;
 }
 @keyframes thinking-pulse {
@@ -114,7 +115,8 @@
 }
 
 /* talking: subtle head bob — lip movement comes from LipSyncController */
-.avatar[data-mood="talking"] .characterWrap {
+.avatar[data-mood="talking"] .characterWrap,
+.talking {
   animation: talking-bob 0.5s ease-in-out infinite alternate;
 }
 @keyframes talking-bob {
@@ -122,7 +124,8 @@
   to   { transform: translateY(-2px); }
 }
 
-.avatar[data-mood="error"] .characterWrap {
+.avatar[data-mood="error"] .characterWrap,
+.error {
   animation: error-shake 0.45s ease-in-out forwards;
 }
 @keyframes error-shake {
@@ -133,7 +136,8 @@
   80%     { transform: translateX(4px); }
 }
 
-.avatar[data-pushing="true"] .characterWrap {
+.avatar[data-pushing="true"] .characterWrap,
+.pushing {
   animation: pushing-bounce 0.55s ease-in-out infinite alternate !important;
 }
 @keyframes pushing-bounce {

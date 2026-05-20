@@ -115,7 +115,6 @@ describe('LipSyncController', () => {
   })
 
   it('ASCII chars produce lower intensity than CJK', () => {
-    const ctrl = new LipSyncController()
     const cjkStates: MouthState[] = []
     const asciiStates: MouthState[] = []
 
