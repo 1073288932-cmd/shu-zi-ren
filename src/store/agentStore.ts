@@ -47,7 +47,8 @@ export const useAgentStore = create<AgentStoreState>()(set => ({
 
   setMood: mood => set({ mood }),
   setIsPushing: isPushing => set({ isPushing }),
-  setMouthState: ({ shape, intensity }) => set({ mouthShape: shape, speakingIntensity: intensity }),
+  setMouthState: ({ shape, intensity }) =>
+    set({ mouthShape: shape, speakingIntensity: Math.max(0, Math.min(1, intensity)) }),
   setInputText: inputText => set({ inputText }),
   setIsLoading: isLoading => set({ isLoading }),
   setError: error => set({ error }),
