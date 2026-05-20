@@ -25,6 +25,7 @@ export class RecorderASRProvider implements ASRProvider {
   private mimeType = ''
   private chunks: Blob[] = []
   private timeoutId: ReturnType<typeof setTimeout> | null = null
+  private pendingStop = false
   private resultCb: ((text: string, isFinal: boolean) => void) | null = null
   private errorCb: ((code: string) => void) | null = null
   private endCb: (() => void) | null = null
@@ -59,8 +60,16 @@ export class RecorderASRProvider implements ASRProvider {
         this.recorder.start()
         this.status = 'recording'
 
+        if (this.pendingStop) {
+          this.pendingStop = false
+          this.status = 'transcribing'
+          this.recorder.stop()
+          return
+        }
+
         this.timeoutId = setTimeout(() => { this.stop() }, 15_000)
       } catch {
+        this.pendingStop = false
         stream.getTracks().forEach(t => t.stop())
         this.stream = null
         this.recorder = null
@@ -68,12 +77,17 @@ export class RecorderASRProvider implements ASRProvider {
         this.errorCb?.('start-failed')
       }
     }).catch(() => {
+      this.pendingStop = false
       this.status = 'idle'
       this.errorCb?.('permission-denied')
     })
   }
 
   stop(): void {
+    if (this.status === 'starting') {
+      this.pendingStop = true
+      return
+    }
     if (this.status !== 'recording') return
     this.status = 'transcribing'
     this.recorder?.stop()
@@ -108,6 +122,7 @@ export class RecorderASRProvider implements ASRProvider {
     } catch {
       this.errorCb?.('ASR_ERROR')
     } finally {
+      this.pendingStop = false
       if (this.timeoutId !== null) {
         clearTimeout(this.timeoutId)
         this.timeoutId = null

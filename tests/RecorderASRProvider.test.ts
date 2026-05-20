@@ -237,4 +237,18 @@ describe('RecorderASRProvider', () => {
 
     vi.useRealTimers()
   })
+
+  it('stop() during starting state → pendingStop causes immediate stop after getUserMedia resolves', async () => {
+    const provider = new RecorderASRProvider()
+    const endCb = vi.fn()
+    provider.onEnd(endCb)
+
+    provider.start()            // status: idle → starting, getUserMedia pending
+    provider.stop()             // status still starting → sets pendingStop, no-op otherwise
+
+    await flush()               // getUserMedia resolves
+
+    // recorder.stop() should have been called immediately (not wait for 15s timeout)
+    expect(mockRecorderInstance.stop).toHaveBeenCalled()
+  })
 })
