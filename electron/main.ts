@@ -173,7 +173,7 @@ ipcMain.handle('set-api-key', async (event, key: unknown): Promise<AppError | un
 })
 
 // IPC: transcribe audio via Silicon Flow Whisper
-ipcMain.handle('transcribe-audio', async (event, buffer: unknown) => {
+ipcMain.handle('transcribe-audio', async (event, buffer: unknown): Promise<AppError | string> => {
   const isValidSender = BrowserWindow.fromWebContents(event.sender) !== null
   return handleTranscribeAudio(buffer, isValidSender, process.env.SILICONFLOW_API_KEY ?? '')
 })
