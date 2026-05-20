@@ -1,9 +1,11 @@
 import { create } from 'zustand'
-import type { AvatarMood, AgentMessage, ResourceCard, AppError } from '@shared/types'
+import type { AvatarMood, MouthShape, MouthState, AgentMessage, ResourceCard, AppError } from '@shared/types'
 
 interface AgentStoreState {
   mood: AvatarMood
   isPushing: boolean
+  mouthShape: MouthShape
+  speakingIntensity: number
   inputText: string
   isLoading: boolean
   error: AppError | null
@@ -14,6 +16,7 @@ interface AgentStoreState {
 
   setMood: (mood: AvatarMood) => void
   setIsPushing: (isPushing: boolean) => void
+  setMouthState: (state: MouthState) => void
   setInputText: (text: string) => void
   setIsLoading: (loading: boolean) => void
   setError: (error: AppError | null) => void
@@ -28,6 +31,8 @@ interface AgentStoreState {
 export const initialState = {
   mood: 'idle' as AvatarMood,
   isPushing: false,
+  mouthShape: 'closed' as MouthShape,
+  speakingIntensity: 0,
   inputText: '',
   isLoading: false,
   error: null as AppError | null,
@@ -42,6 +47,7 @@ export const useAgentStore = create<AgentStoreState>()(set => ({
 
   setMood: mood => set({ mood }),
   setIsPushing: isPushing => set({ isPushing }),
+  setMouthState: ({ shape, intensity }) => set({ mouthShape: shape, speakingIntensity: intensity }),
   setInputText: inputText => set({ inputText }),
   setIsLoading: isLoading => set({ isLoading }),
   setError: error => set({ error }),

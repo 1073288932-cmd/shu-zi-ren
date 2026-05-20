@@ -1,5 +1,12 @@
 export type AvatarMood = 'idle' | 'thinking' | 'talking' | 'error'
 
+export type MouthShape = 'closed' | 'slightlyOpen' | 'ee' | 'oh' | 'ah' | 'wide'
+
+export interface MouthState {
+  shape: MouthShape
+  intensity: number  // 0–1
+}
+
 export interface AvatarState {
   mood: AvatarMood
   isPushing: boolean
