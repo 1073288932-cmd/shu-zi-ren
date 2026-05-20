@@ -1,11 +1,10 @@
 import type { ASRProvider } from './ASRProvider'
-import { WebSpeechASRProvider } from './WebSpeechASRProvider'
+import { RecorderASRProvider } from './RecorderASRProvider'
 import { NoopASRProvider } from './NoopASRProvider'
 
-const SR = typeof window !== 'undefined'
-  ? (window.SpeechRecognition ?? (window as Window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition)
-  : undefined
-
-export const asrProvider: ASRProvider = SR
-  ? new WebSpeechASRProvider()
-  : new NoopASRProvider()
+export const asrProvider: ASRProvider =
+  typeof navigator !== 'undefined' &&
+  typeof navigator.mediaDevices?.getUserMedia === 'function' &&
+  typeof MediaRecorder !== 'undefined'
+    ? new RecorderASRProvider()
+    : new NoopASRProvider()
