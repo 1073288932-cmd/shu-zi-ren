@@ -2,6 +2,7 @@ import { useCallback, useRef } from 'react'
 import { useAgentStore } from '../store/agentStore'
 import { aiProvider } from '../services/ai'
 import { ttsProvider } from '../services/tts'
+import { lipSyncController } from '../services/lipsync'
 import { isAppError } from '../services/ai/ElectronAIProvider'
 import type { AppError } from '@shared/types'
 
@@ -32,12 +33,25 @@ export function useAI() {
       s.setIsLoading(false)
 
       const myGen = ttsGenRef.current
-      ttsProvider.speak(response.reply).then(() => {
+
+      lipSyncController.start(response.reply, state => {
+        if (ttsGenRef.current === myGen) useAgentStore.getState().setMouthState(state)
+      })
+
+      const finishTalking = () => {
         if (ttsGenRef.current === myGen) {
+          lipSyncController.stop()
+          useAgentStore.getState().setMouthState({ shape: 'closed', intensity: 0 })
           useAgentStore.getState().setMood('idle')
           useAgentStore.getState().setIsPushing(false)
         }
-      })
+      }
+
+      try {
+        ttsProvider.speak(response.reply).then(finishTalking).catch(finishTalking)
+      } catch {
+        finishTalking()
+      }
     } catch (err: unknown) {
       const appError: AppError = isAppError(err)
         ? (err as AppError)

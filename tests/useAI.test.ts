@@ -4,6 +4,13 @@ import { useAI } from '../src/hooks/useAI'
 import { useAgentStore, initialState } from '../src/store/agentStore'
 import type { AIResponse } from '@shared/types'
 
+const mockLipSyncStart = vi.hoisted(() => vi.fn())
+const mockLipSyncStop = vi.hoisted(() => vi.fn())
+
+vi.mock('../src/services/lipsync', () => ({
+  lipSyncController: { start: mockLipSyncStart, stop: mockLipSyncStop },
+}))
+
 const mockReply = 'Test AI reply about friction'
 const mockResponse: AIResponse = {
   reply: mockReply,
@@ -40,6 +47,8 @@ describe('useAI', () => {
     useAgentStore.setState(initialState)
     mockSpeak.mockReturnValue(new Promise<void>(() => {}))  // pending by default
     mockStop.mockReset()
+    mockLipSyncStart.mockReset()
+    mockLipSyncStop.mockReset()
   })
 
   afterEach(() => {
@@ -231,5 +240,70 @@ describe('useAI', () => {
 
     expect(mockStop).toHaveBeenCalled()
     expect(useAgentStore.getState().mood).toBe('error')
+  })
+
+  it('starts lip-sync with reply text when AI response arrives', async () => {
+    const { result } = renderHook(() => useAI())
+
+    await act(async () => {
+      result.current.sendMessage('摩擦力')
+      await vi.runAllTicks()
+    })
+
+    expect(mockLipSyncStart).toHaveBeenCalledWith(mockReply, expect.any(Function))
+  })
+
+  it('stops lip-sync when TTS completes', async () => {
+    let resolveTts!: () => void
+    mockSpeak.mockReturnValue(new Promise<void>(r => { resolveTts = r }))
+
+    const { result } = renderHook(() => useAI())
+
+    await act(async () => {
+      result.current.sendMessage('test')
+      await vi.runAllTicks()
+    })
+
+    expect(mockLipSyncStop).not.toHaveBeenCalled()
+
+    await act(async () => { resolveTts() })
+
+    expect(mockLipSyncStop).toHaveBeenCalled()
+  })
+
+  it('stops lip-sync when TTS fails', async () => {
+    let rejectTts!: (err: Error) => void
+    mockSpeak.mockReturnValue(new Promise<void>((_, r) => { rejectTts = r }))
+
+    const { result } = renderHook(() => useAI())
+
+    await act(async () => {
+      result.current.sendMessage('test')
+      await vi.runAllTicks()
+    })
+
+    expect(mockLipSyncStop).not.toHaveBeenCalled()
+
+    await act(async () => { rejectTts(new Error('tts error')) })
+
+    expect(mockLipSyncStop).toHaveBeenCalled()
+  })
+
+  it('resets mouth state after TTS ends', async () => {
+    let resolveTts!: () => void
+    mockSpeak.mockReturnValue(new Promise<void>(r => { resolveTts = r }))
+
+    const { result } = renderHook(() => useAI())
+
+    await act(async () => {
+      result.current.sendMessage('test')
+      await vi.runAllTicks()
+    })
+
+    await act(async () => { resolveTts() })
+
+    const s = useAgentStore.getState()
+    expect(s.mouthShape).toBe('closed')
+    expect(s.speakingIntensity).toBe(0)
   })
 })
