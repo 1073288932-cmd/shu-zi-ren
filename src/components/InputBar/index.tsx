@@ -49,15 +49,17 @@ export function InputBar() {
     }
   }
 
-  function handleMic() {
-    if (isListening) {
-      asrProvider.stop()
-      setIsListening(false)
-      setInterimText('')
-    } else {
-      asrProvider.start()
-      setIsListening(true)
-    }
+  function handleMicPointerDown(e: React.PointerEvent) {
+    e.preventDefault()
+    if (isLoading || !asrProvider.available) return
+    asrProvider.start()
+    setIsListening(true)
+  }
+
+  function handleMicPointerUp() {
+    if (!isListening) return
+    asrProvider.stop()
+    // isListening stays true until onEnd fires (after transcription completes)
   }
 
   async function handleSaveApiKey() {
@@ -131,10 +133,13 @@ export function InputBar() {
 
         <button
           className={`${styles.micBtn}${isListening ? ` ${styles.micBtnActive}` : ''}`}
-          onClick={handleMic}
+          onPointerDown={handleMicPointerDown}
+          onPointerUp={handleMicPointerUp}
+          onPointerCancel={handleMicPointerUp}
+          onPointerLeave={handleMicPointerUp}
           disabled={!asrProvider.available || isLoading}
-          title={asrProvider.available ? (isListening ? '停止录音' : '语音输入') : '语音输入（不支持）'}
-          aria-label={isListening ? '停止录音' : '语音输入'}
+          title={asrProvider.available ? (isListening ? '转写中…' : '按住说话') : '语音输入（不支持）'}
+          aria-label={isListening ? '转写中' : '按住说话'}
         >
           🎙
         </button>
