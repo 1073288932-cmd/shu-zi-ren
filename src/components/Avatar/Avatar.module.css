@@ -21,6 +21,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  animation: idle-float 3s ease-in-out infinite;
 }
 
 .characterImg {
@@ -97,15 +98,12 @@
 }
 
 /* ── Mood animations — applied to .characterWrap ────────────────────── */
-.avatar[data-mood="idle"] .characterWrap {
-  animation: idle-float 3s ease-in-out infinite;
-}
+/* idle-float is the default (defined on .characterWrap above) */
 @keyframes idle-float {
   0%, 100% { transform: translateY(0); }
   50%       { transform: translateY(-5px); }
 }
 
-.avatar[data-mood="thinking"] .characterWrap,
 .thinking {
   animation: thinking-pulse 0.9s ease-in-out infinite;
 }
@@ -115,7 +113,6 @@
 }
 
 /* talking: subtle head bob — lip movement comes from LipSyncController */
-.avatar[data-mood="talking"] .characterWrap,
 .talking {
   animation: talking-bob 0.5s ease-in-out infinite alternate;
 }
@@ -124,7 +121,6 @@
   to   { transform: translateY(-2px); }
 }
 
-.avatar[data-mood="error"] .characterWrap,
 .error {
   animation: error-shake 0.45s ease-in-out forwards;
 }
@@ -136,9 +132,8 @@
   80%     { transform: translateX(4px); }
 }
 
-.avatar[data-pushing="true"] .characterWrap,
 .pushing {
-  animation: pushing-bounce 0.55s ease-in-out infinite alternate !important;
+  animation: pushing-bounce 0.55s ease-in-out infinite alternate;
 }
 @keyframes pushing-bounce {
   from { transform: translateY(0) rotate(0deg); }
