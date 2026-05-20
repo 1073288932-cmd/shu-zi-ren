@@ -10,6 +10,7 @@ import { createCatalog } from './services/resourceCatalog'
 import { DeepseekAIProvider } from './services/DeepseekAIProvider'
 import { validateChatMessages } from './services/validateChatMessages'
 import { mapDeepseekError } from './services/mapDeepseekError'
+import { handleTranscribeAudio } from './services/transcribeAudioHandler'
 import type { AppError } from '../shared/types'
 
 // MVP: hardcoded resource whitelist. Replace with config file loader later.
@@ -169,6 +170,12 @@ ipcMain.handle('set-api-key', async (event, key: unknown): Promise<AppError | un
   } catch {
     return { code: 'AI_ERROR', message: '保存 API Key 失败，请检查应用权限', recoverable: true }
   }
+})
+
+// IPC: transcribe audio via Silicon Flow Whisper
+ipcMain.handle('transcribe-audio', async (event, buffer: unknown) => {
+  const isValidSender = BrowserWindow.fromWebContents(event.sender) !== null
+  return handleTranscribeAudio(buffer, isValidSender, process.env.SILICONFLOW_API_KEY ?? '')
 })
 
 ipcMain.handle('chat', async (event, messages: unknown) => {

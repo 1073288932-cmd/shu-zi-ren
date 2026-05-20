@@ -33,4 +33,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setApiKey(key: string): Promise<AppError | undefined> {
     return ipcRenderer.invoke('set-api-key', key)
   },
+
+  transcribeAudio(buffer: ArrayBuffer): Promise<import('../shared/types').AppError | string> {
+    return ipcRenderer.invoke('transcribe-audio', buffer)
+  },
 })

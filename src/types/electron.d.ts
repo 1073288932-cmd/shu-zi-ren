@@ -9,6 +9,7 @@ declare global {
       onError(cb: (err: AppError) => void): () => void
       chat(messages: AgentMessage[]): Promise<AIResponse | AppError>
       setApiKey(key: string): Promise<AppError | undefined>
+      transcribeAudio(buffer: ArrayBuffer): Promise<AppError | string>
     }
   }
 }
