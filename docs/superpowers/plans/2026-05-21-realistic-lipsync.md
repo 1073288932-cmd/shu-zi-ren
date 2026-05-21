@@ -4,13 +4,13 @@
 >
 > ⚠️ **CRITICAL SERIAL CONSTRAINT**: Tasks 9, 10, and 11 all write `src/hooks/useAvatarVideoQueue.ts` with full replacements. They MUST be dispatched sequentially — never in parallel. Parallel dispatch will cause later tasks to overwrite earlier tasks' work.
 >
-> ⚠️ **REQUIRED BEFORE TASK 5**: Complete Task 4a (API contract verification) first. The Action names in Task 5 are placeholders that must be replaced with verified values before any code is written.
+> ✅ **Task 4a complete**: IVH API uses custom appkey/accesstoken auth (NOT TC3-HMAC-SHA256). Endpoint: `gw.tvs.qq.com`. REST paths: `…/phototovideonotrain` (submit) + `…/getprogress` (poll). Task 5 has been rewritten accordingly.
 
 **Goal:** 用腾讯云"照片免训练"数智人 API 替换当前 CSS overlay 口型方案，让角色 PNG 在 AI 回答时以含真实口型同步的视频形式播报。
 
 **Architecture:** 主进程封装腾讯云签名 / COS 上传 / 数智人 API 调用 / 视频下载校验。事件式 IPC 把进度推给 renderer。Renderer 端 `useAvatarVideoQueue` 实现"按句拆分→双缓冲串播→首段 12s 看门狗→技术失败 Web Speech 兜底→审核失败 blocked 提示→连续失败熔断"完整生命周期。`<video>` 替代 `<img>` 渲染。
 
-**Tech Stack:** Electron + Vite + React 18 + TypeScript + Zustand + Vitest + `cos-nodejs-sdk-v5`（COS）+ 原生 `fetch` + TC3-HMAC-SHA256（数智人 API，自己签名）。
+**Tech Stack:** Electron + Vite + React 18 + TypeScript + Zustand + Vitest + `cos-nodejs-sdk-v5`（COS）+ 原生 `fetch` + TC3-HMAC-SHA256（COS 签名）+ IVH appkey/accesstoken HMAC（数智人 API 签名）。
 
 ---
 
@@ -20,7 +20,7 @@
 
 ```
 electron/services/
-  TencentSigner.ts                   # TC3-HMAC-SHA256 签名工具（仅数智人 API 用）
+  TencentSigner.ts                   # TC3-HMAC-SHA256 签名工具（仅 COS 用）
   TencentCosClient.ts                # 启动时上传 character.png；hash dedup + HEAD 校验 + 签名 URL 续签
   TencentDigitalHumanService.ts      # submitTask + pollUntilDone + fetch + 下载校验
   avatarVideoHandler.ts              # IPC 串联、jobId 跟踪、AbortController 管理、validateSsml
@@ -911,14 +911,14 @@ git commit -m "docs: record verified Tencent Digital Human API contract (Action/
 - Create: `electron/services/TencentDigitalHumanService.ts`
 - Create: `tests/TencentDigitalHumanService.test.ts`
 
-封装 submit / poll / fetch+validate 全链路。
+封装 IVH API submit / poll / fetch+validate 全链路。鉴权：`base64(HMAC-SHA256(key=accesstoken, msg="appkey={appkey}&timestamp={ts}"))` 作为 URL query param。
 
 - [ ] **Step 1: 写测试**
 
 Create `tests/TencentDigitalHumanService.test.ts`:
 
 ```ts
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { TencentDigitalHumanService, MAX_VIDEO_BYTES, DOWNLOAD_TIMEOUT_MS, POLL_INTERVAL_MS, POLL_TOTAL_TIMEOUT_MS } from '../electron/services/TencentDigitalHumanService'
 
 const fetchMock = vi.fn()
@@ -934,11 +934,9 @@ afterEach(() => {
 })
 
 const config = {
-  secretId: 'id',
-  secretKey: 'key',
-  region: 'ap-shanghai',
-  host: 'ivh.tencentcloudapi.com',
-  version: '2021-03-30',
+  appkey: 'testappkey',
+  accesstoken: 'testaccesstoken',
+  endpoint: 'gw.tvs.qq.com',
 }
 
 function jsonResponse(body: unknown, init?: ResponseInit) {
@@ -948,18 +946,18 @@ function jsonResponse(body: unknown, init?: ResponseInit) {
 }
 
 describe('TencentDigitalHumanService.submitPhotoToVideoNoTrain', () => {
-  it('returns TaskId on 200 + Response.TaskId', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ Response: { TaskId: 'task-42' } }))
+  it('returns JobId on Header.Code=0', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ Header: { Code: 0 }, Payload: { JobId: 'job-42' } }))
     const svc = new TencentDigitalHumanService(config)
-    const taskId = await svc.submitPhotoToVideoNoTrain({
+    const jobId = await svc.submitPhotoToVideoNoTrain({
       refPhotoUrl: 'https://photo', ssml: '你好',
     }, new AbortController().signal)
-    expect(taskId).toBe('task-42')
+    expect(jobId).toBe('job-42')
   })
 
-  it('maps POLICY_VIOLATION error codes', async () => {
+  it('maps policy FailCode 801005 in Payload to POLICY_VIOLATION', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
-      Response: { Error: { Code: 'InvalidParameterValue.PolicyDenied', Message: '审核失败' } },
+      Header: { Code: 1, Message: '内容审核不通过' }, Payload: { FailCode: 801005 },
     }))
     const svc = new TencentDigitalHumanService(config)
     await expect(svc.submitPhotoToVideoNoTrain(
@@ -967,9 +965,19 @@ describe('TencentDigitalHumanService.submitPhotoToVideoNoTrain', () => {
     )).rejects.toMatchObject({ code: 'POLICY_VIOLATION' })
   })
 
-  it('maps other Tencent errors to TENCENT_API_FAIL', async () => {
+  it('maps policy FailCode 802000 in Payload to POLICY_VIOLATION', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
-      Response: { Error: { Code: 'InternalError', Message: 'oops' } },
+      Header: { Code: 1, Message: '图片审核失败' }, Payload: { FailCode: 802000 },
+    }))
+    const svc = new TencentDigitalHumanService(config)
+    await expect(svc.submitPhotoToVideoNoTrain(
+      { refPhotoUrl: 'u', ssml: 't' }, new AbortController().signal
+    )).rejects.toMatchObject({ code: 'POLICY_VIOLATION' })
+  })
+
+  it('maps other Header.Code errors to TENCENT_API_FAIL', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      Header: { Code: 500, Message: '内部错误' }, Payload: {},
     }))
     const svc = new TencentDigitalHumanService(config)
     await expect(svc.submitPhotoToVideoNoTrain(
@@ -987,43 +995,53 @@ describe('TencentDigitalHumanService.submitPhotoToVideoNoTrain', () => {
 })
 
 describe('TencentDigitalHumanService.pollUntilDone', () => {
-  it('emits progress events and resolves when progress=100', async () => {
+  it('resolves VideoUrl when Payload.Status=SUCCESS', async () => {
     fetchMock
-      .mockResolvedValueOnce(jsonResponse({ Response: { Progress: 50 } }))
-      .mockResolvedValueOnce(jsonResponse({ Response: { Progress: 100, MediaUrl: 'https://video' } }))
+      .mockResolvedValueOnce(jsonResponse({ Header: { Code: 0 }, Payload: { Status: 'MAKING', Progress: 50 } }))
+      .mockResolvedValueOnce(jsonResponse({ Header: { Code: 0 }, Payload: { Status: 'SUCCESS', Progress: 100, VideoUrl: 'https://video' } }))
     const svc = new TencentDigitalHumanService(config)
-    const progress: number[] = []
-    const promise = svc.pollUntilDone('t-1', new AbortController().signal, attempt => progress.push(attempt))
+    const attempts: number[] = []
+    const promise = svc.pollUntilDone('job-1', new AbortController().signal, n => attempts.push(n))
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3)
-    const mediaUrl = await promise
-    expect(mediaUrl).toBe('https://video')
-    expect(progress).toEqual([1, 2])
+    const videoUrl = await promise
+    expect(videoUrl).toBe('https://video')
+    expect(attempts).toEqual([1, 2])
   })
 
   it('rejects TENCENT_TIMEOUT after POLL_TOTAL_TIMEOUT_MS', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ Response: { Progress: 10 } }))
+    fetchMock.mockResolvedValue(jsonResponse({ Header: { Code: 0 }, Payload: { Status: 'MAKING', Progress: 10 } }))
     const svc = new TencentDigitalHumanService(config)
-    const promise = svc.pollUntilDone('t-1', new AbortController().signal, () => {})
-    promise.catch(() => {})  // prevent unhandled rejection
+    const promise = svc.pollUntilDone('job-1', new AbortController().signal, () => {})
+    promise.catch(() => {})
     await vi.advanceTimersByTimeAsync(POLL_TOTAL_TIMEOUT_MS + 100)
     await expect(promise).rejects.toMatchObject({ code: 'TENCENT_TIMEOUT' })
   })
 
-  it('propagates POLICY_VIOLATION mid-poll', async () => {
+  it('FAIL status + FailCode 801005 → POLICY_VIOLATION', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
-      Response: { Error: { Code: 'InvalidParameterValue.PolicyDenied', Message: '违规' } },
+      Header: { Code: 0 }, Payload: { Status: 'FAIL', Progress: -1, FailCode: 801005 },
     }))
     const svc = new TencentDigitalHumanService(config)
-    const promise = svc.pollUntilDone('t-1', new AbortController().signal, () => {})
+    const promise = svc.pollUntilDone('job-1', new AbortController().signal, () => {})
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2)
     await expect(promise).rejects.toMatchObject({ code: 'POLICY_VIOLATION' })
   })
 
+  it('FAIL status without policy FailCode → TENCENT_API_FAIL', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      Header: { Code: 0 }, Payload: { Status: 'FAIL', Progress: -1, FailCode: 999 },
+    }))
+    const svc = new TencentDigitalHumanService(config)
+    const promise = svc.pollUntilDone('job-1', new AbortController().signal, () => {})
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2)
+    await expect(promise).rejects.toMatchObject({ code: 'TENCENT_API_FAIL' })
+  })
+
   it('aborts on signal', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ Response: { Progress: 10 } }))
+    fetchMock.mockResolvedValue(jsonResponse({ Header: { Code: 0 }, Payload: { Status: 'MAKING', Progress: 10 } }))
     const svc = new TencentDigitalHumanService(config)
     const controller = new AbortController()
-    const promise = svc.pollUntilDone('t-1', controller.signal, () => {})
+    const promise = svc.pollUntilDone('job-1', controller.signal, () => {})
     promise.catch(() => {})
     controller.abort()
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2)
@@ -1097,7 +1115,7 @@ Expected: FAIL（模块不存在）。
 Create `electron/services/TencentDigitalHumanService.ts`:
 
 ```ts
-import { signTencentRequest } from './TencentSigner'
+import crypto from 'crypto'
 import type { AppError, AvatarVideoErrorCode } from '../../shared/types'
 
 export const MAX_VIDEO_BYTES = 20 * 1024 * 1024
@@ -1105,20 +1123,14 @@ export const POLL_INTERVAL_MS = 1500
 export const POLL_TOTAL_TIMEOUT_MS = 60_000
 export const DOWNLOAD_TIMEOUT_MS = 15_000
 
-const SERVICE = 'ivh'
-const ACTION_SUBMIT = 'SubmitVideoCreationTask'  // ← Task 4a 核实后替换为真实 Action 名
-const ACTION_QUERY = 'QueryVideoCreationTaskStatus'  // ← Task 4a 核实后替换
-
-const POLICY_CODE_PATTERNS = [
-  /PolicyDenied/i, /AuditFailed/i, /ContentPolicy/i,
-]
+const SUBMIT_PATH = '/v2/ivh/videomaker/broadcastservice/phototovideonotrain'
+const QUERY_PATH = '/v2/ivh/videomaker/broadcastservice/getprogress'
+const POLICY_FAIL_CODES = new Set([801005, 802000])
 
 export interface TencentDigitalHumanConfig {
-  secretId: string
-  secretKey: string
-  region: string
-  host: string         // ivh.tencentcloudapi.com
-  version: string
+  appkey: string
+  accesstoken: string
+  endpoint: string   // 'gw.tvs.qq.com'
 }
 
 export interface SubmitInput {
@@ -1130,34 +1142,33 @@ function toAppError(code: AvatarVideoErrorCode, message: string): AppError {
   return { code, message, recoverable: code !== 'INVALID_INPUT' && code !== 'POLICY_VIOLATION' }
 }
 
-function classifyTencentError(code: string, message: string): AppError {
-  if (POLICY_CODE_PATTERNS.some(re => re.test(code)) || POLICY_CODE_PATTERNS.some(re => re.test(message))) {
-    return toAppError('POLICY_VIOLATION', message || 'Tencent content policy denied')
-  }
-  return toAppError('TENCENT_API_FAIL', `${code}: ${message}`)
+function buildSignedUrl(endpoint: string, path: string, appkey: string, accesstoken: string): string {
+  const timestamp = Math.floor(Date.now() / 1000)
+  const message = `appkey=${appkey}&timestamp=${timestamp}`
+  const signature = crypto.createHmac('sha256', accesstoken).update(message, 'utf8').digest('base64')
+  const params = new URLSearchParams({ appkey, timestamp: String(timestamp), signature })
+  return `https://${endpoint}${path}?${params}`
 }
 
 export class TencentDigitalHumanService {
   constructor(private cfg: TencentDigitalHumanConfig) {}
 
   async submitPhotoToVideoNoTrain(input: SubmitInput, signal: AbortSignal): Promise<string> {
-    const payload = {
-      RefPhotoUrl: input.refPhotoUrl,
-      DriverType: 'Text',
-      InputSsml: input.ssml,
+    const data = await this.call(SUBMIT_PATH, {
+      Header: {},
+      Payload: { RefPhotoUrl: input.refPhotoUrl, InputSsml: input.ssml, DriverType: 'Text' },
+    }, signal)
+    const jobId: unknown = data?.Payload?.JobId
+    if (typeof jobId !== 'string' || !jobId) {
+      throw toAppError('TENCENT_API_FAIL', 'IVH did not return JobId')
     }
-    const data = await this.call(ACTION_SUBMIT, payload, signal)
-    const taskId: unknown = data?.Response?.TaskId
-    if (typeof taskId !== 'string' || !taskId) {
-      throw toAppError('TENCENT_API_FAIL', 'Tencent did not return TaskId')
-    }
-    return taskId
+    return jobId
   }
 
   async pollUntilDone(
-    taskId: string,
+    jobId: string,
     signal: AbortSignal,
-    onAttempt: (attempt: number) => void
+    onAttempt: (attempt: number) => void,
   ): Promise<string> {
     const deadline = Date.now() + POLL_TOTAL_TIMEOUT_MS
     let attempt = 0
@@ -1166,12 +1177,21 @@ export class TencentDigitalHumanService {
       if (Date.now() >= deadline) throw toAppError('TENCENT_TIMEOUT', 'Polling timed out')
       attempt++
       onAttempt(attempt)
-      const data = await this.call(ACTION_QUERY, { TaskId: taskId }, signal)
-      const resp = data?.Response ?? {}
-      const progress: unknown = resp.Progress
-      const mediaUrl: unknown = resp.MediaUrl
-      if (typeof progress === 'number' && progress >= 100 && typeof mediaUrl === 'string') {
-        return mediaUrl
+      const data = await this.call(QUERY_PATH, { Header: {}, Payload: { JobId: jobId } }, signal)
+      const payload = data?.Payload ?? {}
+      const status: unknown = payload.Status
+      const failCode: unknown = payload.FailCode
+
+      if (status === 'FAIL' || payload.Progress === -1) {
+        if (typeof failCode === 'number' && POLICY_FAIL_CODES.has(failCode)) {
+          throw toAppError('POLICY_VIOLATION', `IVH policy denied (FailCode ${failCode})`)
+        }
+        throw toAppError('TENCENT_API_FAIL', `IVH job failed (FailCode ${failCode ?? 'unknown'})`)
+      }
+      if (status === 'SUCCESS') {
+        const videoUrl: unknown = payload.VideoUrl
+        if (typeof videoUrl === 'string' && videoUrl) return videoUrl
+        throw toAppError('TENCENT_API_FAIL', 'IVH SUCCESS but no VideoUrl')
       }
       await this.sleep(POLL_INTERVAL_MS, signal)
     }
@@ -1179,21 +1199,20 @@ export class TencentDigitalHumanService {
 
   async downloadVideo(
     url: string,
-    signal: AbortSignal
+    signal: AbortSignal,
   ): Promise<{ buffer: ArrayBuffer; mimeType: string }> {
     const downloadController = new AbortController()
     const cancelOnOuter = () => downloadController.abort()
     signal.addEventListener('abort', cancelOnOuter, { once: true })
 
-    const timer = setTimeout(() => downloadController.abort('timeout'), DOWNLOAD_TIMEOUT_MS)
+    let didTimeout = false
+    const timer = setTimeout(() => { didTimeout = true; downloadController.abort() }, DOWNLOAD_TIMEOUT_MS)
     try {
       let res: Response
       try {
         res = await fetch(url, { signal: downloadController.signal })
       } catch (err: unknown) {
-        if (downloadController.signal.aborted && (timer as unknown) /* hit timeout */) {
-          throw toAppError('TENCENT_TIMEOUT', 'Download timed out')
-        }
+        if (didTimeout) throw toAppError('TENCENT_TIMEOUT', 'Download timed out')
         throw toAppError('NETWORK', err instanceof Error ? err.message : String(err))
       }
       if (!res.ok) throw toAppError('TENCENT_API_FAIL', `Download status ${res.status}`)
@@ -1214,35 +1233,37 @@ export class TencentDigitalHumanService {
     }
   }
 
-  private async call(action: string, payload: unknown, signal: AbortSignal): Promise<{ Response?: Record<string, unknown> }> {
-    const body = JSON.stringify(payload)
-    const timestamp = Math.floor(Date.now() / 1000)
-    const signed = signTencentRequest({
-      secretId: this.cfg.secretId,
-      secretKey: this.cfg.secretKey,
-      service: SERVICE,
-      host: this.cfg.host,
-      action,
-      version: this.cfg.version,
-      region: this.cfg.region,
-      timestamp,
-      payload: body,
-    })
+  private async call(
+    path: string,
+    body: unknown,
+    signal: AbortSignal,
+  ): Promise<{ Header?: Record<string, unknown>; Payload?: Record<string, unknown> }> {
+    const url = buildSignedUrl(this.cfg.endpoint, path, this.cfg.appkey, this.cfg.accesstoken)
     let res: Response
     try {
-      res = await fetch(`https://${this.cfg.host}`, {
-        method: 'POST', headers: signed.headers, body, signal,
+      res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal,
       })
     } catch (err: unknown) {
       throw toAppError('NETWORK', err instanceof Error ? err.message : String(err))
     }
-    if (!res.ok) {
-      throw toAppError('TENCENT_API_FAIL', `HTTP ${res.status}`)
+    if (!res.ok) throw toAppError('TENCENT_API_FAIL', `HTTP ${res.status}`)
+    const data = await res.json().catch(() => ({})) as {
+      Header?: { Code?: number; Message?: string }
+      Payload?: Record<string, unknown>
     }
-    const data = await res.json().catch(() => ({})) as { Response?: { Error?: { Code: string; Message: string } } }
-    const error = data?.Response?.Error
-    if (error?.Code) throw classifyTencentError(error.Code, error.Message ?? '')
-    return data as { Response?: Record<string, unknown> }
+    const code = data?.Header?.Code
+    if (typeof code === 'number' && code !== 0) {
+      const failCode = data?.Payload?.FailCode
+      if (typeof failCode === 'number' && POLICY_FAIL_CODES.has(failCode)) {
+        throw toAppError('POLICY_VIOLATION', data.Header?.Message ?? 'IVH policy denied')
+      }
+      throw toAppError('TENCENT_API_FAIL', data.Header?.Message ?? `IVH error code ${code}`)
+    }
+    return data as { Header?: Record<string, unknown>; Payload?: Record<string, unknown> }
   }
 
   private sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -1256,21 +1277,19 @@ export class TencentDigitalHumanService {
 }
 ```
 
-> **REQUIRED:** Task 4a 已核实真实 Action 名。在提交本 Task 5 之前，确认 `ACTION_SUBMIT`、`ACTION_QUERY`、`version`、`host` 以及测试 fixture 中的 Action 字符串均已与 Task 4a 核实结果一致。不允许保留占位名。
-
 - [ ] **Step 4: 运行测试**
 
 ```bash
 npx vitest run tests/TencentDigitalHumanService.test.ts
 ```
 
-Expected: 12 passed.
+Expected: 13 passed.
 
 - [ ] **Step 5: 提交**
 
 ```bash
 git add electron/services/TencentDigitalHumanService.ts tests/TencentDigitalHumanService.test.ts
-git commit -m "feat: TencentDigitalHumanService — submit/poll/download with full validation"
+git commit -m "feat: TencentDigitalHumanService — IVH appkey/accesstoken auth, submit/poll/download"
 ```
 
 ---
@@ -1561,25 +1580,34 @@ function resolveAvatarImagePath(): string {
 }
 
 function initAvatarVideoServices(): void {
+  const ivhAppkey = process.env.TENCENT_IVH_APPKEY ?? ''
+  const ivhAccesstoken = process.env.TENCENT_IVH_ACCESSTOKEN ?? ''
+  const ivhEndpoint = process.env.TENCENT_IVH_ENDPOINT ?? 'gw.tvs.qq.com'
+
+  if (!ivhAppkey || !ivhAccesstoken) {
+    console.warn('[avatar-video] IVH appkey/accesstoken missing — video disabled, Web Speech fallback active')
+    return
+  }
+
   const secretId = process.env.TENCENT_SECRET_ID ?? ''
   const secretKey = process.env.TENCENT_SECRET_KEY ?? ''
   const cosRegion = process.env.TENCENT_COS_REGION ?? 'ap-shanghai'
   const cosBucket = process.env.TENCENT_COS_BUCKET ?? ''
   const useSignedUrl = (process.env.TENCENT_COS_USE_SIGNED_URL ?? 'true') !== 'false'
-  const dhRegion = process.env.TENCENT_DIGITAL_HUMAN_REGION ?? 'ap-shanghai'
 
   if (!secretId || !secretKey || !cosBucket) {
-    console.warn('[avatar-video] Tencent credentials or bucket missing — feature disabled')
+    console.warn('[avatar-video] COS credentials or bucket missing — video disabled')
     return
   }
+
   cosClient = new TencentCosClient(
     { secretId, secretKey, region: cosRegion, bucket: cosBucket, useSignedUrl },
     { read: readConfigJson, write: writeConfigJson }
   )
   dhService = new TencentDigitalHumanService({
-    secretId, secretKey, region: dhRegion,
-    host: 'ivh.tencentcloudapi.com',
-    version: '2021-03-30',  // ← Task 4a 核实后替换
+    appkey: ivhAppkey,
+    accesstoken: ivhAccesstoken,
+    endpoint: ivhEndpoint,
   })
 
   // Upload character.png to COS in background
