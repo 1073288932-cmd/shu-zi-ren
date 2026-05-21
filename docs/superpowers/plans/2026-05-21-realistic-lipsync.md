@@ -1553,12 +1553,11 @@ function writeConfigJson(next: Record<string, unknown>): void {
 }
 
 // Resolves the character image path for both dev and packaged builds.
-// Dev:       __dirname = dist-electron/, src/assets is accessible relative to project root
-// Packaged:  asar packs src/assets away; character.png is copied to resources/avatar/ via extraResources
+// The canonical copy lives at <project-root>/resources/avatar/character.png.
+// electron-builder.json already bundles resources/**/* into app.asar, so
+// __dirname/../resources/avatar/character.png works identically in dev and packaged.
 function resolveAvatarImagePath(): string {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'avatar', 'character.png')
-    : path.join(__dirname, '..', 'src', 'assets', 'avatar', 'character.png')
+  return path.join(__dirname, '..', 'resources', 'avatar', 'character.png')
 }
 
 function initAvatarVideoServices(): void {
@@ -1598,39 +1597,26 @@ function initAvatarVideoServices(): void {
 }
 ```
 
-- [ ] **Step 6a: 配置 electron-builder extraResources（打包资源路径）**
+- [ ] **Step 6a: 将 character.png 放入 resources/avatar/**
 
-Open `package.json`. Find the `"build"` section (or create one). Add `extraResources` to copy the character PNG into the packaged app's `resources/avatar/` directory:
-
-```json
-{
-  "build": {
-    "extraResources": [
-      {
-        "from": "src/assets/avatar/character.png",
-        "to": "avatar/character.png"
-      }
-    ]
-  }
-}
-```
-
-If there is already an `extraResources` array, append to it instead of replacing.
-
-Verify the path in source is correct:
+`electron-builder.json` 的 `files` 已包含 `"resources/**/*"`，无需修改任何配置。只需在项目根建目录并放入文件：
 
 ```bash
-ls src/assets/avatar/character.png && echo "OK source exists"
+mkdir -p resources/avatar
+cp src/assets/avatar/character.png resources/avatar/character.png
+ls resources/avatar/character.png && echo "OK"
 ```
 
-Expected: `OK source exists`.
+Expected: `OK`.
 
-- [ ] **Step 6b: 验证路径解析逻辑**
+> **说明：** 主进程（COS 上传）从 `resources/avatar/character.png` 读文件，在 dev 和 packaged 下路径完全相同（`__dirname/../resources/`）。渲染层的 `<img>` 仍通过 Vite 的 `import characterImg from '../../assets/avatar/character.png'` 加载，两者互不干扰。
 
-Add this temporary logging to `initAvatarVideoServices`, right before `const buf = fs.readFileSync(characterPath)`, to verify the resolved path in dev mode:
+- [ ] **Step 6b: 验证路径可读**
+
+Add this temporary logging to `initAvatarVideoServices`, right before `const buf = fs.readFileSync(characterPath)`:
 
 ```ts
-console.log(`[avatar-video] characterPath (isPackaged=${app.isPackaged}): ${characterPath}`)
+console.log(`[avatar-video] characterPath: ${characterPath}`)
 ```
 
 Run dev:
@@ -1639,7 +1625,7 @@ Run dev:
 npm run dev
 ```
 
-Check the Electron console output. Expected log line shows the path without `src/assets` in the packaged path. Remove the `console.log` before committing.
+Check the Electron console. Expected: path ends with `resources/avatar/character.png` and file is found (no ENOENT). Remove the `console.log` before committing.
 
 - [ ] **Step 6c: TypeScript 检查**（原 Step 7）
 
@@ -1710,7 +1696,7 @@ ipcMain.on('avatar-video:cancel', (_event, jobId: unknown) => {
 - [ ] **Step 7: 提交**
 
 ```bash
-git add electron/services/avatarVideoHandler.ts tests/avatarVideoHandler.test.ts electron/main.ts electron/preload.ts package.json
+git add electron/services/avatarVideoHandler.ts tests/avatarVideoHandler.test.ts electron/main.ts electron/preload.ts resources/avatar/character.png
 git commit -m "feat: IPC plumbing — avatar-video job lifecycle with validation + cancel + packaged path resolution"
 ```
 
