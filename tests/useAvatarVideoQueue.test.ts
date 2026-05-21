@@ -200,3 +200,130 @@ describe('useAvatarVideoQueue — multi-segment double buffer', () => {
     expect(useAgentStore.getState().videoQueueState).toBe('idle')
   })
 })
+
+describe('useAvatarVideoQueue — fallback & blocked & circuit breaker', () => {
+  it('first segment NETWORK error → fallback reads remaining (= all) via Web Speech', async () => {
+    mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('一段。二段。') })
+    await act(async () => {
+      errorSubs[0]({ jobId: 'j1', error: { code: 'NETWORK', message: 'down', recoverable: true } })
+    })
+    expect(useAgentStore.getState().videoQueueState).toBe('fallback')
+    expect(mockSpeak).toHaveBeenCalledWith('一段。二段。')
+  })
+
+  it('mid-stream error after first segment played: Web Speech reads only remaining', async () => {
+    mockGenerate
+      .mockResolvedValueOnce({ ok: true, jobId: 'j1' })
+      .mockResolvedValueOnce({ ok: true, jobId: 'j2' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('段一。段二。段三。') })
+    await act(async () => { doneSubs[0]({ jobId: 'j1', buffer: new ArrayBuffer(4), mimeType: 'video/mp4' }) })
+    act(() => { result.current.handleVideoEnded() })  // played++ to 1
+    await act(async () => {
+      errorSubs[0]({ jobId: 'j2', error: { code: 'TENCENT_API_FAIL', message: 'oops', recoverable: true } })
+    })
+    expect(mockSpeak).toHaveBeenCalledWith('段二。段三。')
+  })
+
+  it('POLICY_VIOLATION → blocked, NO Web Speech', async () => {
+    mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('被审核。') })
+    await act(async () => {
+      errorSubs[0]({ jobId: 'j1', error: { code: 'POLICY_VIOLATION', message: '违规', recoverable: false } })
+    })
+    expect(useAgentStore.getState().videoQueueState).toBe('blocked')
+    expect(useAgentStore.getState().avatarVideoError?.code).toBe('POLICY_VIOLATION')
+    expect(mockSpeak).not.toHaveBeenCalled()
+  })
+
+  it('first-segment 12s timeout → fallback', async () => {
+    vi.useFakeTimers()
+    mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('hi.') })
+    await act(async () => { await vi.advanceTimersByTimeAsync(12_000 + 50) })
+    expect(mockCancel).toHaveBeenCalledWith('j1')
+    expect(useAgentStore.getState().videoQueueState).toBe('fallback')
+    expect(mockSpeak).toHaveBeenCalledWith('hi.')
+    vi.useRealTimers()
+  })
+
+  it('circuit breaker: 3 consecutive failures → next enqueue goes straight to Web Speech', async () => {
+    mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    for (let i = 0; i < 3; i++) {
+      await act(async () => { await result.current.enqueue(`第${i}条。`) })
+      await act(async () => {
+        errorSubs[0]({ jobId: 'j1', error: { code: 'NETWORK', message: 'down', recoverable: true } })
+      })
+    }
+    mockGenerate.mockClear()
+    mockSpeak.mockClear()
+    await act(async () => { await result.current.enqueue('应直接走 Web Speech。') })
+    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(mockSpeak).toHaveBeenCalledWith('应直接走 Web Speech。')
+  })
+
+  it('first success after partial failures resets the counter', async () => {
+    mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('一次。') })
+    await act(async () => {
+      errorSubs[0]({ jobId: 'j1', error: { code: 'NETWORK', message: '?', recoverable: true } })
+    })
+    await act(async () => { await result.current.enqueue('二次。') })
+    await act(async () => {
+      doneSubs[0]({ jobId: 'j1', buffer: new ArrayBuffer(4), mimeType: 'video/mp4' })
+    })
+    // Two more failures shouldn't trip breaker because success reset it
+    await act(async () => {
+      errorSubs[0]({ jobId: 'j1', error: { code: 'NETWORK', message: '?', recoverable: true } })
+    })
+    await act(async () => { await result.current.enqueue('三次。') })
+    mockGenerate.mockClear()
+    await act(async () => { await result.current.enqueue('四次。') })
+    expect(mockGenerate).toHaveBeenCalled()  // not skipped
+  })
+
+  it('POLICY_VIOLATION does NOT increment circuit breaker counter', async () => {
+    mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    for (let i = 0; i < 3; i++) {
+      await act(async () => { await result.current.enqueue(`违规${i}。`) })
+      await act(async () => {
+        errorSubs[0]({ jobId: 'j1', error: { code: 'POLICY_VIOLATION', message: '!', recoverable: false } })
+      })
+    }
+    mockGenerate.mockClear()
+    await act(async () => { await result.current.enqueue('再来一次。') })
+    expect(mockGenerate).toHaveBeenCalled()  // breaker not tripped
+  })
+
+  it('user cancel does NOT increment circuit breaker counter', async () => {
+    mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    for (let i = 0; i < 3; i++) {
+      await act(async () => { await result.current.enqueue(`x${i}。`) })
+      act(() => { result.current.cancel() })
+    }
+    mockGenerate.mockClear()
+    await act(async () => { await result.current.enqueue('未熔断。') })
+    expect(mockGenerate).toHaveBeenCalled()
+  })
+
+  it('next-round enqueue clears blocked state', async () => {
+    mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('违规。') })
+    await act(async () => {
+      errorSubs[0]({ jobId: 'j1', error: { code: 'POLICY_VIOLATION', message: '!', recoverable: false } })
+    })
+    expect(useAgentStore.getState().videoQueueState).toBe('blocked')
+    await act(async () => { await result.current.enqueue('正常。') })
+    expect(useAgentStore.getState().videoQueueState).not.toBe('blocked')
+    expect(useAgentStore.getState().avatarVideoError).toBeNull()
+  })
+})
