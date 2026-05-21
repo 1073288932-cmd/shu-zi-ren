@@ -1,5 +1,14 @@
 import crypto from 'crypto'
 
+/**
+ * TC3-HMAC-SHA256 signing for Tencent Cloud APIs.
+ *
+ * @electron-main-process-only
+ * The returned headers include `Host`, which is a forbidden header in browser
+ * fetch() calls. This module must only be used in the Electron main process.
+ * Importing it in a renderer would silently drop `Host` and cause a signature
+ * mismatch at the Tencent API server.
+ */
 export interface SignTencentRequestInput {
   secretId: string
   secretKey: string
@@ -27,6 +36,7 @@ function hmac(key: Buffer | string, msg: string): Buffer {
 
 export function signTencentRequest(input: SignTencentRequestInput): SignTencentRequestResult {
   const { secretId, secretKey, service, host, action, version, region, timestamp, payload } = input
+  if (timestamp > 1e12) throw new Error('timestamp must be Unix seconds, not milliseconds')
   const date = new Date(timestamp * 1000).toISOString().substring(0, 10)  // YYYY-MM-DD UTC
 
   // Step 1: Canonical request

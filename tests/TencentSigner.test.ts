@@ -5,7 +5,7 @@ describe('TencentSigner', () => {
   it('produces a known good Authorization for a fixed input', () => {
     // Fixture from Tencent docs (官方示例 cvm.tencentcloudapi.com / DescribeInstances)
     const result = signTencentRequest({
-      secretId: 'AKIDz8krbsJ5yKBZQpn74WFkmLPx3*******',
+      secretId: 'AKIDz8krbsJ5yKBZQpn74WFkmLPx3*******',  // literal fixture strings from Tencent docs
       secretKey: 'Gu5t9xGARNpq86cd98joQYCN3*******',
       service: 'cvm',
       host: 'cvm.tencentcloudapi.com',
