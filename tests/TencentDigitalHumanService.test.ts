@@ -97,7 +97,7 @@ describe('TencentDigitalHumanService.pollUntilDone', () => {
     await expect(promise).rejects.toMatchObject({ code: 'TENCENT_TIMEOUT' })
   })
 
-  it('FAIL status + FailCode 801005 → POLICY_VIOLATION', async () => {
+  it('FAIL status + FailCode 801005 → POLICY_VIOLATION, recoverable=false', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({
       Header: { Code: 0 }, Payload: { Status: 'FAIL', Progress: -1, FailCode: 801005 },
     }))
@@ -105,7 +105,18 @@ describe('TencentDigitalHumanService.pollUntilDone', () => {
     const promise = svc.pollUntilDone('job-1', new AbortController().signal, () => {})
     promise.catch(() => {})
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2)
-    await expect(promise).rejects.toMatchObject({ code: 'POLICY_VIOLATION' })
+    await expect(promise).rejects.toMatchObject({ code: 'POLICY_VIOLATION', recoverable: false })
+  })
+
+  it('SUCCESS with no VideoUrl → TENCENT_API_FAIL', async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({
+      Header: { Code: 0 }, Payload: { Status: 'SUCCESS', Progress: 100 },
+    }))
+    const svc = new TencentDigitalHumanService(config)
+    const promise = svc.pollUntilDone('job-1', new AbortController().signal, () => {})
+    promise.catch(() => {})
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 2)
+    await expect(promise).rejects.toMatchObject({ code: 'TENCENT_API_FAIL', recoverable: true })
   })
 
   it('FAIL status without policy FailCode → TENCENT_API_FAIL', async () => {
@@ -180,5 +191,15 @@ describe('TencentDigitalHumanService.downloadVideo', () => {
     promise.catch(() => {})
     await vi.advanceTimersByTimeAsync(DOWNLOAD_TIMEOUT_MS + 100)
     await expect(promise).rejects.toMatchObject({ code: 'TENCENT_TIMEOUT' })
+  })
+
+  it('rejects TENCENT_API_FAIL when actual buffer exceeds MAX_VIDEO_BYTES (no Content-Length)', async () => {
+    const bigBytes = new Uint8Array(MAX_VIDEO_BYTES + 1) as Uint8Array<ArrayBuffer>
+    fetchMock.mockResolvedValueOnce(new Response(bigBytes, {
+      status: 200, headers: { 'Content-Type': 'video/mp4' },
+    }))
+    const svc = new TencentDigitalHumanService(config)
+    await expect(svc.downloadVideo('https://video', new AbortController().signal))
+      .rejects.toMatchObject({ code: 'TENCENT_API_FAIL' })
   })
 })

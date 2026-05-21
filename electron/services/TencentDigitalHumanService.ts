@@ -160,10 +160,14 @@ export class TencentDigitalHumanService {
 
   private sleep(ms: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
-      const t = setTimeout(resolve, ms)
+      let t: ReturnType<typeof setTimeout>
       const onAbort = () => { clearTimeout(t); reject(toAppError('TENCENT_API_FAIL', 'aborted during sleep')) }
-      if (signal.aborted) onAbort()
-      else signal.addEventListener('abort', onAbort, { once: true })
+      if (signal.aborted) { onAbort(); return }
+      signal.addEventListener('abort', onAbort, { once: true })
+      t = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort)
+        resolve()
+      }, ms)
     })
   }
 }
