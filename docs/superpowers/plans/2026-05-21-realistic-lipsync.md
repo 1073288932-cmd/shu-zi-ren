@@ -1,6 +1,10 @@
 # 真实人物口型同步（腾讯云数智人）Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+>
+> ⚠️ **CRITICAL SERIAL CONSTRAINT**: Tasks 9, 10, and 11 all write `src/hooks/useAvatarVideoQueue.ts` with full replacements. They MUST be dispatched sequentially — never in parallel. Parallel dispatch will cause later tasks to overwrite earlier tasks' work.
+>
+> ⚠️ **REQUIRED BEFORE TASK 5**: Complete Task 4a (API contract verification) first. The Action names in Task 5 are placeholders that must be replaced with verified values before any code is written.
 
 **Goal:** 用腾讯云"照片免训练"数智人 API 替换当前 CSS overlay 口型方案，让角色 PNG 在 AI 回答时以含真实口型同步的视频形式播报。
 
@@ -190,6 +194,17 @@ describe('textSegmentation', () => {
     expect(textSegmentation(text)).toEqual(['一'.repeat(100) + '。是。'])
   })
 
+  it('does NOT merge tiny trailing segment if result would exceed MAX_SEGMENT_CHARS', () => {
+    // '一'.repeat(239) + '。' = 240 chars; + '是。' (2 chars) = 242 > 240 → must NOT merge
+    const seg = '一'.repeat(239) + '。'
+    const tail = '是。'
+    expect(seg.length).toBe(240)
+    expect(tail.length).toBe(2)
+    const result = textSegmentation(seg + tail)
+    expect(result).toHaveLength(2)
+    for (const s of result) expect(s.length).toBeLessThanOrEqual(MAX_SEGMENT_CHARS)
+  })
+
   it('handles English mixed with Chinese punctuation', () => {
     const text = '物理公式 F=ma。在牛顿力学中，F 表示力，m 表示质量。'
     expect(textSegmentation(text)).toEqual([text])
@@ -207,7 +222,7 @@ describe('textSegmentation', () => {
 npx vitest run tests/textSegmentation.test.ts
 ```
 
-Expected: 11 failed（模块不存在）。
+Expected: 12 failed（模块不存在）。
 
 - [ ] **Step 3: 写实现**
 
@@ -289,10 +304,14 @@ export function textSegmentation(input: string): string[] {
   }
   if (buf) segments.push(buf)
 
-  // Merge a tiny trailing fragment into the previous segment.
-  if (segments.length >= 2 && segments[segments.length - 1].length < MIN_SEGMENT_CHARS) {
-    const last = segments.pop()!
-    segments[segments.length - 1] += last
+  // Merge a tiny trailing fragment into the previous segment, only if it doesn't exceed the limit.
+  if (segments.length >= 2) {
+    const last = segments[segments.length - 1]
+    const prev = segments[segments.length - 2]
+    if (last.length < MIN_SEGMENT_CHARS && prev.length + last.length <= MAX_SEGMENT_CHARS) {
+      segments.pop()
+      segments[segments.length - 1] += last
+    }
   }
 
   return segments
@@ -305,7 +324,7 @@ export function textSegmentation(input: string): string[] {
 npx vitest run tests/textSegmentation.test.ts
 ```
 
-Expected: 11 passed.
+Expected: 12 passed.
 
 - [ ] **Step 5: TypeScript 检查**
 
@@ -833,6 +852,59 @@ git commit -m "feat: TencentCosClient — hash-dedup upload + HEAD check + signe
 
 ---
 
+## Task 4a: 腾讯云数智人 API Contract 核实
+
+**Files:** （只读核实，不写代码）
+
+> **目的：** Task 5 所用的 `ACTION_SUBMIT` / `ACTION_QUERY` / `Version` / `Host` / 请求体字段 / 响应字段均为占位值。不核实直接实现，所有测试都是"自证通过"——真实 API 会直接失败。本任务要求在写任何代码前先拿到真实 API 合同。
+
+- [ ] **Step 1: 查阅腾讯云数智人文档**
+
+打开文档（需腾讯云账号或通过 Google 搜索 "腾讯云 智能数智人 照片免训练 API"）：
+- 主入口：https://cloud.tencent.com/document/product/1240（智能数字人产品文档）
+- 照片免训练接口：在 "API文档" → "视频合成" 分支查找 SubmitPortraitSingTask 或类似接口
+
+待核实的每一项：
+
+| 参数 | 占位值（plan 里） | 真实值（核实后填入） |
+|------|------------------|----------------------|
+| Submit Action | `SubmitVideoCreationTask` | ？ |
+| Query Action | `QueryVideoCreationTaskStatus` | ？ |
+| Version | `2021-03-30` | ？ |
+| Host | `ivh.tencentcloudapi.com` | ？ |
+| 提交请求体：图片字段名 | `RefPhotoUrl` | ？ |
+| 提交请求体：文本字段名 | `InputSsml` + `DriverType` | ？ |
+| 查询请求体：任务 ID 字段名 | `TaskId` | ？ |
+| 查询响应：进度字段名 | `Progress` | ？（0-100？还是枚举？） |
+| 查询响应：视频 URL 字段名 | `MediaUrl` | ？ |
+| 审核失败 Error.Code 规律 | `PolicyDenied` 子串 | ？（需在错误码文档中确认） |
+
+- [ ] **Step 2: 填写核实结果**
+
+在本 step 下补全上表右列。若与占位值不同，在 commit message 中标注差异。
+
+- [ ] **Step 3: 验证 Task 5 代码与核实结果一致**
+
+确认 `TencentDigitalHumanService.ts` 中所有常量与上表一致：
+- `ACTION_SUBMIT` 与 Submit Action 一致
+- `ACTION_QUERY` 与 Query Action 一致
+- `config.version` 与 Version 一致
+- `config.host` 与 Host 一致
+- `payload` 字段名与请求体字段名一致
+- `resp.Progress` / `resp.MediaUrl` / `resp.TaskId` 与响应字段名一致
+- `POLICY_CODE_PATTERNS` 能匹配真实的审核失败 Code
+
+若任何项与真实 API 不符，必须在 Task 5 实现前修正测试 fixture 和实现代码。
+
+- [ ] **Step 4: 提交核实记录**
+
+```bash
+git add docs/superpowers/plans/2026-05-21-realistic-lipsync.md
+git commit -m "docs: record verified Tencent Digital Human API contract (Action/Version/fields)"
+```
+
+---
+
 ## Task 5: TencentDigitalHumanService
 
 **Files:**
@@ -1034,8 +1106,8 @@ export const POLL_TOTAL_TIMEOUT_MS = 60_000
 export const DOWNLOAD_TIMEOUT_MS = 15_000
 
 const SERVICE = 'ivh'
-const ACTION_SUBMIT = 'SubmitVideoCreationTask'  // 占位；plan 阶段如腾讯文档不同请改此处与对应测试
-const ACTION_QUERY = 'QueryVideoCreationTaskStatus'
+const ACTION_SUBMIT = 'SubmitVideoCreationTask'  // ← Task 4a 核实后替换为真实 Action 名
+const ACTION_QUERY = 'QueryVideoCreationTaskStatus'  // ← Task 4a 核实后替换
 
 const POLICY_CODE_PATTERNS = [
   /PolicyDenied/i, /AuditFailed/i, /ContentPolicy/i,
@@ -1184,7 +1256,7 @@ export class TencentDigitalHumanService {
 }
 ```
 
-> **Note for implementer:** `ACTION_SUBMIT` 和 `ACTION_QUERY` 是占位名。在 plan 落地前必须用 https://cloud.tencent.com.cn/document/product/1240/118475 上的 Action 名替换并相应更新测试 fixture。提交本任务前请核实并在 commit message 中标注采用的 Action 名。
+> **REQUIRED:** Task 4a 已核实真实 Action 名。在提交本 Task 5 之前，确认 `ACTION_SUBMIT`、`ACTION_QUERY`、`version`、`host` 以及测试 fixture 中的 Action 字符串均已与 Task 4a 核实结果一致。不允许保留占位名。
 
 - [ ] **Step 4: 运行测试**
 
@@ -1480,6 +1552,15 @@ function writeConfigJson(next: Record<string, unknown>): void {
   fs.writeFileSync(p, JSON.stringify(next, null, 2), 'utf-8')
 }
 
+// Resolves the character image path for both dev and packaged builds.
+// Dev:       __dirname = dist-electron/, src/assets is accessible relative to project root
+// Packaged:  asar packs src/assets away; character.png is copied to resources/avatar/ via extraResources
+function resolveAvatarImagePath(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'avatar', 'character.png')
+    : path.join(__dirname, '..', 'src', 'assets', 'avatar', 'character.png')
+}
+
 function initAvatarVideoServices(): void {
   const secretId = process.env.TENCENT_SECRET_ID ?? ''
   const secretKey = process.env.TENCENT_SECRET_KEY ?? ''
@@ -1499,11 +1580,11 @@ function initAvatarVideoServices(): void {
   dhService = new TencentDigitalHumanService({
     secretId, secretKey, region: dhRegion,
     host: 'ivh.tencentcloudapi.com',
-    version: '2021-03-30',
+    version: '2021-03-30',  // ← Task 4a 核实后替换
   })
 
-  // Upload character.png in background
-  const characterPath = path.join(__dirname, '..', 'src', 'assets', 'avatar', 'character.png')
+  // Upload character.png to COS in background
+  const characterPath = resolveAvatarImagePath()
   cachedRefPhotoUrl = (async () => {
     try {
       const buf = fs.readFileSync(characterPath)
@@ -1516,6 +1597,57 @@ function initAvatarVideoServices(): void {
   cachedRefPhotoUrl.catch(() => {/* don't crash main */})
 }
 ```
+
+- [ ] **Step 6a: 配置 electron-builder extraResources（打包资源路径）**
+
+Open `package.json`. Find the `"build"` section (or create one). Add `extraResources` to copy the character PNG into the packaged app's `resources/avatar/` directory:
+
+```json
+{
+  "build": {
+    "extraResources": [
+      {
+        "from": "src/assets/avatar/character.png",
+        "to": "avatar/character.png"
+      }
+    ]
+  }
+}
+```
+
+If there is already an `extraResources` array, append to it instead of replacing.
+
+Verify the path in source is correct:
+
+```bash
+ls src/assets/avatar/character.png && echo "OK source exists"
+```
+
+Expected: `OK source exists`.
+
+- [ ] **Step 6b: 验证路径解析逻辑**
+
+Add this temporary logging to `initAvatarVideoServices`, right before `const buf = fs.readFileSync(characterPath)`, to verify the resolved path in dev mode:
+
+```ts
+console.log(`[avatar-video] characterPath (isPackaged=${app.isPackaged}): ${characterPath}`)
+```
+
+Run dev:
+
+```bash
+npm run dev
+```
+
+Check the Electron console output. Expected log line shows the path without `src/assets` in the packaged path. Remove the `console.log` before committing.
+
+- [ ] **Step 6c: TypeScript 检查**（原 Step 7）
+
+```bash
+npx tsc --noEmit 2>&1 | head -30
+```
+
+Expected: 无新增报错。
 
 In the `app.whenReady().then(() => { ... })` block, after the existing init code, add:
 
@@ -1575,19 +1707,11 @@ ipcMain.on('avatar-video:cancel', (_event, jobId: unknown) => {
 })
 ```
 
-- [ ] **Step 7: TypeScript 检查**
+- [ ] **Step 7: 提交**
 
 ```bash
-npx tsc --noEmit 2>&1 | head -30
-```
-
-Expected: 无新增报错。
-
-- [ ] **Step 8: 提交**
-
-```bash
-git add electron/services/avatarVideoHandler.ts tests/avatarVideoHandler.test.ts electron/main.ts electron/preload.ts
-git commit -m "feat: IPC plumbing — avatar-video job lifecycle with validation + cancel"
+git add electron/services/avatarVideoHandler.ts tests/avatarVideoHandler.test.ts electron/main.ts electron/preload.ts package.json
+git commit -m "feat: IPC plumbing — avatar-video job lifecycle with validation + cancel + packaged path resolution"
 ```
 
 ---
@@ -2053,6 +2177,8 @@ git commit -m "feat: useAvatarVideoQueue — single-segment basic flow with blob
 
 ## Task 10: useAvatarVideoQueue — 多段双缓冲
 
+> ⚠️ **SERIAL — 禁止并行 subagent**: 本任务对 `src/hooks/useAvatarVideoQueue.ts` 做完整替换。必须在 Task 9 完全 commit 后才能开始。不得与 Task 9 或 Task 11 同时派发给并行 subagent。
+
 **Files:**
 - Modify: `src/hooks/useAvatarVideoQueue.ts`
 - Modify: `tests/useAvatarVideoQueue.test.ts`
@@ -2308,6 +2434,8 @@ git commit -m "feat: useAvatarVideoQueue — double-buffer prefetch + stalled st
 ---
 
 ## Task 11: useAvatarVideoQueue — fallback、blocked、熔断器
+
+> ⚠️ **SERIAL — 禁止并行 subagent**: 本任务对 `src/hooks/useAvatarVideoQueue.ts` 做完整替换。必须在 Task 10 完全 commit 后才能开始。不得与 Task 9 或 Task 10 同时派发给并行 subagent。
 
 **Files:**
 - Modify: `src/hooks/useAvatarVideoQueue.ts`
@@ -3236,8 +3364,8 @@ Expected: Vite 启动，Electron 窗口打开。控制台应输出：`[avatar-vi
 
 | Spec 章节 | 实现任务 |
 |----------|----------|
-| 一站式架构 | Tasks 5, 6, 13 |
-| 照片免训练 API | Task 5 |
+| 一站式架构 | Tasks 4a, 5, 6, 13 |
+| 照片免训练 API（已验真实 Action 名）| Task 4a, Task 5 |
 | COS 私有 + 签名 URL | Task 4, 6 |
 | Web Speech fallback | Task 11 (`fallbackRemaining`) |
 | 段间衔接：双缓冲 + 定格 | Tasks 10, 11, 12 |
@@ -3258,7 +3386,7 @@ Expected: Vite 启动，Electron 窗口打开。控制台应输出：`[avatar-vi
 
 ### Placeholder 扫描
 
-- "占位 Action 名" 在 Task 5 已显式标注为 plan 阶段需核实；不算 placeholder 而是 documented uncertainty。
+- Task 4a 要求在 Task 5 实现前核实真实 Action 名；Task 5 代码中的 `ACTION_SUBMIT` / `ACTION_QUERY` 带有明确注释提示替换。
 - 无 TBD / TODO / "implement later"。
 - 测试均含完整代码块；代码改动均含完整 diff。
 
