@@ -18,6 +18,15 @@ vi.mock('../src/services/avatarVideo', () => ({
   },
 }))
 
+// Mock textSegmentation to split on 。 per sentence for test control
+vi.mock('../src/services/textSegmentation', () => ({
+  textSegmentation: (text: string) =>
+    text.trim()
+      .split(/(?<=。)/)
+      .map(s => s.trim())
+      .filter(Boolean),
+}))
+
 // Mock Web Speech TTS provider
 const mockSpeak = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 const mockTtsStop = vi.hoisted(() => vi.fn())
@@ -116,5 +125,78 @@ describe('useAvatarVideoQueue — single segment', () => {
     const { result } = renderHook(() => useAvatarVideoQueue())
     await act(async () => { await result.current.enqueue('hi.') })
     expect(useAgentStore.getState().avatarVideoError).toBeNull()
+  })
+})
+
+describe('useAvatarVideoQueue — multi-segment double buffer', () => {
+  it('after first segment starts playing, prefetches segment 2', async () => {
+    mockGenerate
+      .mockResolvedValueOnce({ ok: true, jobId: 'j1' })
+      .mockResolvedValueOnce({ ok: true, jobId: 'j2' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('一段。二段。') })
+    expect(mockGenerate).toHaveBeenCalledTimes(1)
+    expect(mockGenerate).toHaveBeenNthCalledWith(1, '一段。')
+
+    // First segment ready → playing → triggers prefetch of segment 2
+    await act(async () => {
+      doneSubs[0]({ jobId: 'j1', buffer: new ArrayBuffer(8), mimeType: 'video/mp4' })
+    })
+    await vi.waitFor(() => expect(mockGenerate).toHaveBeenCalledTimes(2))
+    expect(mockGenerate).toHaveBeenNthCalledWith(2, '二段。')
+  })
+
+  it('on ended with next ready: swaps URL, revokes old, plays next', async () => {
+    mockGenerate
+      .mockResolvedValueOnce({ ok: true, jobId: 'j1' })
+      .mockResolvedValueOnce({ ok: true, jobId: 'j2' })
+    mockCreateObjectURL.mockReturnValueOnce('blob:1').mockReturnValueOnce('blob:2')
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('一段。二段。') })
+    await act(async () => { doneSubs[0]({ jobId: 'j1', buffer: new ArrayBuffer(4), mimeType: 'video/mp4' }) })
+    await vi.waitFor(() => expect(mockGenerate).toHaveBeenCalledTimes(2))
+    await act(async () => { doneSubs[0]({ jobId: 'j2', buffer: new ArrayBuffer(4), mimeType: 'video/mp4' }) })
+
+    act(() => { result.current.handleVideoEnded() })
+
+    expect(mockRevokeObjectURL).toHaveBeenCalledWith('blob:1')
+    expect(useAgentStore.getState().videoUrl).toBe('blob:2')
+    expect(useAgentStore.getState().videoQueueState).toBe('playing')
+  })
+
+  it('on ended with next NOT ready: enters stalled state', async () => {
+    mockGenerate
+      .mockResolvedValueOnce({ ok: true, jobId: 'j1' })
+      .mockResolvedValueOnce({ ok: true, jobId: 'j2' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('一段。二段。') })
+    await act(async () => { doneSubs[0]({ jobId: 'j1', buffer: new ArrayBuffer(4), mimeType: 'video/mp4' }) })
+    act(() => { result.current.handleVideoEnded() })
+    expect(useAgentStore.getState().videoQueueState).toBe('stalled')
+  })
+
+  it('stalled then next ready: transitions to playing', async () => {
+    mockGenerate
+      .mockResolvedValueOnce({ ok: true, jobId: 'j1' })
+      .mockResolvedValueOnce({ ok: true, jobId: 'j2' })
+    mockCreateObjectURL.mockReturnValueOnce('blob:1').mockReturnValueOnce('blob:2')
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('一段。二段。') })
+    await act(async () => { doneSubs[0]({ jobId: 'j1', buffer: new ArrayBuffer(4), mimeType: 'video/mp4' }) })
+    act(() => { result.current.handleVideoEnded() })
+    expect(useAgentStore.getState().videoQueueState).toBe('stalled')
+    await act(async () => { doneSubs[0]({ jobId: 'j2', buffer: new ArrayBuffer(4), mimeType: 'video/mp4' }) })
+    expect(useAgentStore.getState().videoUrl).toBe('blob:2')
+    expect(useAgentStore.getState().videoQueueState).toBe('playing')
+  })
+
+  it('after last segment ends: revokes and goes to idle', async () => {
+    mockGenerate.mockResolvedValueOnce({ ok: true, jobId: 'j1' })
+    const { result } = renderHook(() => useAvatarVideoQueue())
+    await act(async () => { await result.current.enqueue('独段。') })
+    await act(async () => { doneSubs[0]({ jobId: 'j1', buffer: new ArrayBuffer(4), mimeType: 'video/mp4' }) })
+    act(() => { result.current.handleVideoEnded() })
+    expect(useAgentStore.getState().videoUrl).toBeNull()
+    expect(useAgentStore.getState().videoQueueState).toBe('idle')
   })
 })
