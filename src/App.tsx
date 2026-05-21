@@ -4,17 +4,19 @@ import { ResourceCard } from './components/ResourceCard'
 import { InputBar } from './components/InputBar'
 import { useAgentStore } from './store/agentStore'
 import { useAutoResizeWindow } from './hooks/useAutoResizeWindow'
+import { useAI } from './hooks/useAI'
 import styles from './App.module.css'
 
 export default function App() {
   const resourceCards = useAgentStore(state => state.resourceCards)
   const shellRef = useRef<HTMLDivElement>(null)
+  const { sendMessage, retry, handleVideoEnded } = useAI()
 
   useAutoResizeWindow(shellRef)
 
   return (
     <div className={styles.shell} ref={shellRef}>
-      <Avatar />
+      <Avatar onVideoEnded={handleVideoEnded} />
 
       {resourceCards.length > 0 && (
         <>
@@ -29,7 +31,7 @@ export default function App() {
       )}
 
       <div className={styles.divider} />
-      <InputBar />
+      <InputBar sendMessage={sendMessage} retry={retry} />
     </div>
   )
 }

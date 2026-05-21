@@ -1,16 +1,19 @@
 import { useState, useEffect } from 'react'
 import { useAgentStore } from '../../store/agentStore'
-import { useAI } from '../../hooks/useAI'
 import { asrProvider } from '../../services/asr'
 import styles from './InputBar.module.css'
 
-export function InputBar() {
+interface InputBarProps {
+  sendMessage: (text: string) => Promise<void>
+  retry: () => void
+}
+
+export function InputBar({ sendMessage, retry }: InputBarProps) {
   const inputText = useAgentStore(state => state.inputText)
   const setInputText = useAgentStore(state => state.setInputText)
   const mood = useAgentStore(state => state.mood)
   const error = useAgentStore(state => state.error)
   const isLoading = useAgentStore(state => state.isLoading)
-  const { sendMessage, retry } = useAI()
 
   const [isListening, setIsListening] = useState(false)
   const [interimText, setInterimText] = useState('')

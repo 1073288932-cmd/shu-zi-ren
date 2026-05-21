@@ -4,11 +4,16 @@ import { useAI } from '../src/hooks/useAI'
 import { useAgentStore, initialState } from '../src/store/agentStore'
 import type { AIResponse } from '@shared/types'
 
-const mockLipSyncStart = vi.hoisted(() => vi.fn())
-const mockLipSyncStop = vi.hoisted(() => vi.fn())
+const mockEnqueue = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+const mockQueueCancel = vi.hoisted(() => vi.fn())
+const mockHandleVideoEnded = vi.hoisted(() => vi.fn())
 
-vi.mock('../src/services/lipsync', () => ({
-  lipSyncController: { start: mockLipSyncStart, stop: mockLipSyncStop },
+vi.mock('../src/hooks/useAvatarVideoQueue', () => ({
+  useAvatarVideoQueue: () => ({
+    enqueue: mockEnqueue,
+    cancel: mockQueueCancel,
+    handleVideoEnded: mockHandleVideoEnded,
+  }),
 }))
 
 const mockReply = 'Test AI reply about friction'
@@ -33,22 +38,14 @@ vi.mock('../src/services/ai', () => ({
   aiProvider: { chat: mockChat },
 }))
 
-const mockSpeak = vi.hoisted(() => vi.fn())
-const mockStop = vi.hoisted(() => vi.fn())
-
-vi.mock('../src/services/tts', () => ({
-  ttsProvider: { speak: mockSpeak, stop: mockStop },
-}))
-
 describe('useAI', () => {
   beforeEach(() => {
     mockChat.mockResolvedValue(mockResponse)
     vi.useFakeTimers()
     useAgentStore.setState(initialState)
-    mockSpeak.mockReturnValue(new Promise<void>(() => {}))  // pending by default
-    mockStop.mockReset()
-    mockLipSyncStart.mockReset()
-    mockLipSyncStop.mockReset()
+    mockEnqueue.mockResolvedValue(undefined)
+    mockQueueCancel.mockReset()
+    mockHandleVideoEnded.mockReset()
   })
 
   afterEach(() => {
@@ -120,153 +117,24 @@ describe('useAI', () => {
     expect(useAgentStore.getState().mood).toBe('talking')
   })
 
-  it('new request increments gen so first TTS resolve is ignored', async () => {
-    let resolveFirst!: () => void
-    mockSpeak
-      .mockReturnValueOnce(new Promise<void>(r => { resolveFirst = r }))
-      .mockReturnValue(new Promise<void>(() => {}))
-
+  it('enqueues reply into avatar video queue on AI success', async () => {
+    mockChat.mockResolvedValueOnce({ reply: '牛顿第一定律：物体保持静止或匀速直线运动。', resourceCards: [] })
     const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('first')
-      await vi.runAllTicks()
-    })
-
-    useAgentStore.setState({ isLoading: false })
-
-    await act(async () => {
-      result.current.sendMessage('second')
-      await vi.runAllTicks()
-    })
-
-    expect(useAgentStore.getState().mood).toBe('talking')
-
-    await act(async () => { resolveFirst() })
-
-    expect(useAgentStore.getState().mood).toBe('talking')
+    await act(async () => { await result.current.sendMessage('牛顿第一定律') })
+    expect(mockEnqueue).toHaveBeenCalledWith('牛顿第一定律：物体保持静止或匀速直线运动。')
   })
 
-  it('mood returns to idle after ttsProvider.speak() resolves', async () => {
-    let resolveTts!: () => void
-    mockSpeak.mockReturnValue(new Promise<void>(r => { resolveTts = r }))
-
+  it('cancels queue at the start of a new sendMessage', async () => {
+    mockChat.mockResolvedValueOnce({ reply: 'ok', resourceCards: [] })
     const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('test')
-      await vi.runAllTicks()
-    })
-
-    expect(useAgentStore.getState().mood).toBe('talking')
-
-    await act(async () => { resolveTts() })
-
-    expect(useAgentStore.getState().mood).toBe('idle')
-    expect(useAgentStore.getState().isPushing).toBe(false)
+    await act(async () => { await result.current.sendMessage('hi') })
+    expect(mockQueueCancel).toHaveBeenCalled()
   })
 
-  it('new request calls ttsProvider.stop() before chat', async () => {
+  it('cancels queue on AI failure', async () => {
+    mockChat.mockRejectedValueOnce(new Error('network error'))
     const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('first')
-      await vi.runAllTicks()
-    })
-
-    useAgentStore.setState({ isLoading: false })
-
-    await act(async () => {
-      result.current.sendMessage('second')
-      await vi.runAllTicks()
-    })
-
-    expect(mockStop).toHaveBeenCalledTimes(2)
-  })
-
-  it('catch path calls ttsProvider.stop()', async () => {
-    mockChat.mockRejectedValue(new Error('network error'))
-    const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('test')
-      await vi.runAllTicks()
-    })
-
-    expect(mockStop).toHaveBeenCalled()
-    expect(useAgentStore.getState().mood).toBe('error')
-  })
-
-  it('starts lip-sync with reply text when AI response arrives', async () => {
-    const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('摩擦力')
-      await vi.runAllTicks()
-    })
-
-    expect(mockLipSyncStart).toHaveBeenCalledWith(mockReply, expect.any(Function))
-  })
-
-  it('stops lip-sync when TTS completes', async () => {
-    let resolveTts!: () => void
-    mockSpeak.mockReturnValue(new Promise<void>(r => { resolveTts = r }))
-
-    const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('test')
-      await vi.runAllTicks()
-    })
-
-    // clear the initial stop() called at sendMessage start; only track finishTalking path
-    mockLipSyncStop.mockClear()
-    expect(mockLipSyncStop).not.toHaveBeenCalled()
-
-    await act(async () => { resolveTts() })
-
-    expect(mockLipSyncStop).toHaveBeenCalled()
-  })
-
-  it('stops lip-sync when TTS fails', async () => {
-    let rejectTts!: (err: Error) => void
-    mockSpeak.mockReturnValue(new Promise<void>((_, r) => { rejectTts = r }))
-
-    const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('test')
-      await vi.runAllTicks()
-    })
-
-    // clear the initial stop() called at sendMessage start; only track finishTalking path
-    mockLipSyncStop.mockClear()
-    expect(mockLipSyncStop).not.toHaveBeenCalled()
-
-    await act(async () => { rejectTts(new Error('tts error')) })
-
-    expect(mockLipSyncStop).toHaveBeenCalled()
-    expect(useAgentStore.getState().mood).toBe('idle')
-    expect(useAgentStore.getState().isPushing).toBe(false)
-    expect(useAgentStore.getState().mouthShape).toBe('closed')
-    expect(useAgentStore.getState().speakingIntensity).toBe(0)
-  })
-
-  it('resets mouth state after TTS ends', async () => {
-    let resolveTts!: () => void
-    mockSpeak.mockReturnValue(new Promise<void>(r => { resolveTts = r }))
-
-    const { result } = renderHook(() => useAI())
-
-    await act(async () => {
-      result.current.sendMessage('test')
-      await vi.runAllTicks()
-    })
-
-    await act(async () => { resolveTts() })
-
-    const s = useAgentStore.getState()
-    expect(s.mouthShape).toBe('closed')
-    expect(s.speakingIntensity).toBe(0)
+    await act(async () => { await result.current.sendMessage('hi') })
+    expect(mockQueueCancel).toHaveBeenCalled()
   })
 })
