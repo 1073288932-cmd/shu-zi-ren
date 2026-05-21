@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { textSegmentation, MAX_SEGMENT_CHARS } from '../src/services/textSegmentation'
+import { textSegmentation, MAX_SEGMENT_CHARS, MIN_SEGMENT_CHARS } from '../src/services/textSegmentation'
 
 describe('textSegmentation', () => {
-  it('exports MAX_SEGMENT_CHARS = 240', () => {
+  it('exports MAX_SEGMENT_CHARS = 240 and MIN_SEGMENT_CHARS = 4', () => {
     expect(MAX_SEGMENT_CHARS).toBe(240)
+    expect(MIN_SEGMENT_CHARS).toBe(4)
   })
 
   it('returns single segment for short text', () => {
@@ -74,5 +75,12 @@ describe('textSegmentation', () => {
 
   it('preserves leading/trailing whitespace within segments but trims overall', () => {
     expect(textSegmentation('  hello.  ')).toEqual(['hello.'])
+  })
+
+  it('handles consecutive sentence delimiters without crashing', () => {
+    const text = '你好。！世界。'
+    const result = textSegmentation(text)
+    expect(result).toHaveLength(1)
+    expect(result[0]).toBe(text)
   })
 })

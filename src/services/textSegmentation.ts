@@ -1,5 +1,5 @@
 export const MAX_SEGMENT_CHARS = 240
-const MIN_SEGMENT_CHARS = 4
+export const MIN_SEGMENT_CHARS = 4
 
 const SENTENCE_DELIMITERS = /([。！？])/
 const SUB_DELIMITERS = /([，、；])/
@@ -53,7 +53,7 @@ export function textSegmentation(input: string): string[] {
   if (!text) return []
 
   const sentences = splitKeepDelim(text, SENTENCE_DELIMITERS)
-  const effective = sentences.length > 0 ? sentences : [text]
+  const effective = sentences
 
   const segments: string[] = []
   let buf = ''
@@ -74,6 +74,8 @@ export function textSegmentation(input: string): string[] {
   if (buf) segments.push(buf)
 
   // Merge a tiny trailing fragment into the previous segment, only if it doesn't exceed the limit.
+  // Note: Interior sub-4-char segments (not just trailing) are NOT merged by design,
+  // as the spec only requires trailing-merge to avoid over-fragmentation at the end.
   if (segments.length >= 2) {
     const last = segments[segments.length - 1]
     const prev = segments[segments.length - 2]
