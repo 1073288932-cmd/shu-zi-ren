@@ -132,7 +132,7 @@ describe('TencentDigitalHumanService.pollUntilDone', () => {
 })
 
 describe('TencentDigitalHumanService.downloadVideo', () => {
-  function videoResponse(body: Uint8Array, contentLength?: number, contentType = 'video/mp4', status = 200) {
+  function videoResponse(body: Uint8Array<ArrayBuffer>, contentLength?: number, contentType = 'video/mp4', status = 200) {
     const headers: Record<string, string> = { 'Content-Type': contentType }
     if (contentLength !== undefined) headers['Content-Length'] = String(contentLength)
     return new Response(body, { status, headers })
