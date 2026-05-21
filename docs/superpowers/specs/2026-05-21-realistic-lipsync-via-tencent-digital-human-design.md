@@ -41,8 +41,10 @@ Status: Draft (pending user review)
 - 计费按生成视频秒数
 
 **图片托管**：腾讯云 COS（同生态、低延迟）
-- 私有桶 + 7 天签名 URL（过期前自动续签）
-- 公网读权限作终极兜底（若数智人 API 拒绝签名 URL）
+- **默认且唯一**：私有桶 + 7 天签名 URL（过期前自动续签）
+- **公网读权限不是自动 fallback**——若数智人 API 拒绝签名 URL，立即报错让用户决定，**不得静默切换到公开**
+- 用户须显式在 `.env` 设置 `TENCENT_COS_USE_SIGNED_URL=false` 才启用公网读模式，且此模式需在 README / `.env.example` 注释中明确隐私警告（"角色图将以可猜难度低的 URL 永久公网可访问"）
+- 角色资产可能是用户私有定制（学校 IP 等），自动公开会扩大暴露面
 
 **TTS fallback**：保留现有 `WebSpeechTTSProvider`
 
@@ -196,6 +198,37 @@ type AvatarSegmentErrorEvent = {
 - progress 事件节流：每次 stage 切换、polling 每轮一次
 - 失败统一转 `AppError`，过 IPC 时序列化为普通 JSON
 
+**主进程 IPC 参数校验（renderer 不可信，硬要求）**：
+`generateAvatarSegment` 在主进程入口必须校验：
+
+```ts
+function validateSsml(input: unknown): string {
+  if (typeof input !== 'string') throw new AppError('INVALID_INPUT', 'ssml 必须是字符串')
+  const trimmed = input.trim()
+  if (trimmed.length === 0) throw new AppError('INVALID_INPUT', 'ssml 不能为空')
+  if (trimmed.length > 300) throw new AppError('INVALID_INPUT', 'ssml 超过 300 字')
+  // 拒绝控制字符（除常见空白 \n \r \t）
+  if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/.test(trimmed)) {
+    throw new AppError('INVALID_INPUT', 'ssml 含非法控制字符')
+  }
+  return trimmed
+}
+```
+
+- 校验失败 → 立即返回 `{ ok: false, error }`，**不发任何事件**、**不调用腾讯 API**
+- `INVALID_INPUT` 不计入熔断器（renderer bug，不是腾讯端问题）
+- IPC 集成测必须覆盖：非字符串、空串、超长、控制字符 4 种 case
+
+**MediaUrl 下载边界（主进程同样硬要求）**：
+`fetch(MediaUrl)` 阶段必须校验：
+
+- HTTP 状态码 200–299，否则 → `TENCENT_API_FAIL`
+- `Content-Type` 以 `video/` 开头，否则 → `TENCENT_API_FAIL`（防腾讯返回 HTML 错误页）
+- `Content-Length` ≤ `MAX_VIDEO_BYTES = 20 * 1024 * 1024`（20MB），缺失 header 时按下载累计字节量判断；超限 → `TENCENT_API_FAIL`
+- 下载阶段独立超时 15s，否则 → `TENCENT_TIMEOUT`
+
+校验失败时**不**把垃圾 buffer 发给 renderer，仅发 `onAvatarSegmentError`。
+
 ---
 
 ## 状态机（useAvatarVideoQueue）
@@ -221,7 +254,7 @@ type AvatarSegmentErrorEvent = {
      │                          └────┬────┘
      │                               │ 首段 12s 超时 / 任一段技术失败
      │                          ┌────▼─────┐
-     │                          │ fallback │ Web Speech 念剩余文本
+     │                          │ fallback │ Web Speech 念【尚未播报】的段
      │                          └────┬─────┘
      │ Web Speech 念完                │
      └───────────────────────────────┘
@@ -239,11 +272,12 @@ type AvatarSegmentErrorEvent = {
 
 ```ts
 type AvatarVideoErrorCode =
-  | 'TENCENT_API_FAIL'   // 通用 API 错误（5xx 等）  → fallback 本轮
-  | 'TENCENT_TIMEOUT'    // 60s 轮询超时 / 首段 12s → fallback 本轮
-  | 'NETWORK'            // fetch/网络失败           → fallback 本轮
-  | 'COS_NOT_READY'      // 启动时 COS 上传失败      → fallback 本轮
-  | 'POLICY_VIOLATION'   // 内容审核拒绝             → blocked，不 fallback
+  | 'INVALID_INPUT'      // 主进程 IPC 校验失败（非字符串/空/超长/控制字符） → 立即返回，不调腾讯，不计入熔断
+  | 'TENCENT_API_FAIL'   // 通用 API 错误（5xx 等）/ 视频下载校验失败 → fallback 剩余段
+  | 'TENCENT_TIMEOUT'    // 60s 轮询超时 / 首段 12s / 下载 15s          → fallback 剩余段
+  | 'NETWORK'            // fetch/网络失败                              → fallback 剩余段
+  | 'COS_NOT_READY'      // 启动时 COS 上传失败                         → fallback 剩余段
+  | 'POLICY_VIOLATION'   // 内容审核拒绝                                → blocked，不 fallback
 ```
 
 **`POLICY_VIOLATION` 的 UX**：
@@ -251,6 +285,31 @@ type AvatarVideoErrorCode =
 - 输入栏下方红色提示行："此回答未通过数字人内容审核，请调整提问后重试"
 - **不朗读** Deepseek 回复文本
 - 输入栏正常可用，下一轮 `enqueue` 自动清除 blocked 并重新尝试视频
+
+**Fallback 的播报范围（防重复播报）**：
+
+`fallback` 路径**只朗读尚未播完的段**，绝不重播已完整播放过的视频段。
+
+```ts
+// useAvatarVideoQueue 内
+function triggerFallback() {
+  const remainingSegments = segmentsRef.current.slice(playedCountRef.current)
+  // 注意：playedCountRef 只在某段 <video> onended 事件触发后才递增；
+  // stalled 状态、生成中、当前播放中的段都算"未播完"。
+  const remainingText = remainingSegments.join('')
+  if (currentUrlRef.current) {
+    URL.revokeObjectURL(currentUrlRef.current)
+    currentUrlRef.current = null
+  }
+  useAgentStore.setState({ videoUrl: null, videoQueueState: 'fallback' })
+  ttsProvider.speak(remainingText).then(onFallbackEnd).catch(onFallbackEnd)
+}
+```
+
+**`playedCountRef` 的精确语义**：
+- 段 N 的 `<video> onended` 触发时 `playedCountRef++`
+- 段 N 的视频还在播放中（哪怕已播 90%）、或处于 `stalled` 等待 N+1 状态时，段 N 仍算"未播完"
+- 上述场景的失败 → fallback 念段 N 起的剩余文本（用户体验上等于"卡住的那段及其后由 Web Speech 接力"）
 
 ---
 
@@ -397,10 +456,10 @@ TENCENT_COS_USE_SIGNED_URL=true              # false → 用公网读 URL
 | 模块 | 测试类型 | 关键 case |
 |------|----------|-----------|
 | `textSegmentation` | 纯函数单测 | 标点拆分、240 字裕度、英文混杂、最短保护、无标点超长兜底 |
-| `TencentCosClient` | fetch mock | 首传成功、hash 命中跳过、HEAD 404 重传、签名 URL 续签 |
-| `TencentDigitalHumanService` | fetch mock | submit → taskId、polling 在 progress=100 停止、60s 超时、`POLICY_VIOLATION` 错误码识别、AbortSignal 中断 |
-| `avatarVideoHandler` | IPC 集成测 | 完整流程发出 submitting/polling/downloading/done、cancel 中断 in-flight、错误事件携带 AppError |
-| `useAvatarVideoQueue` | RTL + fake timer | 双缓冲串播、12s 首段超时 → fallback、ended 后 next 未就绪 → stalled、blocked 不调 Web Speech、熔断 3 次后入口直接 Web Speech、cancel 清理所有 URL、用户 cancel 不计入熔断 |
+| `TencentCosClient` | fetch mock | 首传成功、hash 命中跳过、HEAD 404 重传、签名 URL 续签；签名 URL 被腾讯拒绝时**不**自动切公网读 |
+| `TencentDigitalHumanService` | fetch mock | submit → taskId、polling 在 progress=100 停止、60s 超时、`POLICY_VIOLATION` 错误码识别、AbortSignal 中断；**下载校验**：非 2xx / 非 `video/*` Content-Type / Content-Length > 20MB / 下载 15s 超时 4 种 case |
+| `avatarVideoHandler` | IPC 集成测 | 完整流程发出 submitting/polling/downloading/done、cancel 中断 in-flight、错误事件携带 AppError；**IPC 入参校验**：非字符串 / 空串 / >300 字 / 含控制字符 4 种 case 一律返回 `INVALID_INPUT` 且**不调用任何下游**（用 spy 验证） |
+| `useAvatarVideoQueue` | RTL + fake timer | 双缓冲串播、12s 首段超时 → fallback、ended 后 next 未就绪 → stalled、blocked 不调 Web Speech、熔断 3 次后入口直接 Web Speech、cancel 清理所有 URL、用户 cancel 不计入熔断；**fallback 范围**：段 1 已播完后段 2 失败时 Web Speech 只念段 2+3，不念段 1 |
 | `Avatar` 组件 | RTL 渲染 | state 切换 PNG ↔ video、blocked 文案、onended 触发 hook |
 | 端到端 | 真 API | 一次问答全流程、长回复多段、用户中断、断网恢复、审核失败 |
 
@@ -413,7 +472,7 @@ TENCENT_COS_USE_SIGNED_URL=true              # false → 用公网读 URL
 3. **段间停顿听感**：按句切会在段间产生 0.5–2s 沉默。如果听感断裂明显，改为按段落切。**MVP 用句切**。
 4. **用户中断成本**：cancel 不退还已付费的 API 调用。**记入文档提醒**。
 5. **首启动延迟**：COS 上传不阻塞 UI，未就绪时入口直接走 Web Speech fallback。
-6. **签名 URL vs 公网读**：MVP 默认签名 URL；若实测腾讯 API 拒绝签名 URL，切公网读（配置可切）。
+6. **签名 URL vs 公网读**：MVP 默认签名 URL；若腾讯 API 拒绝签名 URL，**不自动切**——报错 + 提示用户在 `.env` 显式设置 `TENCENT_COS_USE_SIGNED_URL=false` 并自行确认隐私后果。
 7. **腾讯云 SDK 选型**：COS 用 `cos-nodejs-sdk-v5`；数智人 API 用 `tencentcloud-sdk-nodejs` 或直调 HTTP（待 plan 阶段决定）。
 
 ---
@@ -422,8 +481,37 @@ TENCENT_COS_USE_SIGNED_URL=true              # false → 用公网读 URL
 
 | 现有产物 | 处置 |
 |----------|------|
-| `feature/mvp-implementation` 分支（含 CSS overlay 方案） | 用户已声明"保持现状"，作为历史保留；不合并入 main |
-| 本设计实现 | 在新分支 `feature/realistic-lipsync` 上从 main 起步，将本设计的所有删除项与新增项一并落地 |
+| `feature/mvp-implementation` 分支（含 MVP 基础 + CSS overlay 方案，相对 main 已有 58 个 commit） | 是本设计实现的**必要基线**，不能绕开 |
+| 本设计实现 | 在新分支 `feature/realistic-lipsync` 上落地。基线策略见下 |
+
+**分支基线策略（HIGH 优先级，必须先决定再启动 writing-plans）**：
+
+由于 `main` 仅有项目脚手架，缺 Electron/React/Zustand/TTS/Avatar 等整套 MVP 基础设施，**直接从 `main` 起步不可行**。两个可行选项：
+
+**选项 A — 先合并 MVP 到 main，再从 main 起新分支（推荐）**
+
+```bash
+# 1. 把 feature/mvp-implementation 合到 main（哪怕含 CSS overlay 实现）
+git checkout main && git merge feature/mvp-implementation
+
+# 2. 从 main 起新分支
+git worktree add .worktrees/feature-realistic-lipsync -b feature/realistic-lipsync
+```
+
+优点：main 上有可运行的 MVP 基线；新功能的 PR diff 只包含 lipsync 替换。
+代价：CSS overlay 实现会进 main，在 Task 1 立即被新功能删掉（约 200 行短命代码）。
+
+**选项 B — 直接从 feature/mvp-implementation 起新分支**
+
+```bash
+git worktree add .worktrees/feature-realistic-lipsync \
+  -b feature/realistic-lipsync feature/mvp-implementation
+```
+
+优点：避免"合并即将删除的代码"的尴尬。
+代价：新分支最终合并时会同时把 MVP + lipsync 替换一并带入 main，diff 庞大；main 在期间始终不可运行。
+
+**Spec 推荐选项 A。** 由用户在 writing-plans 启动前显式确认。
 | `src/services/tts/WebSpeechTTSProvider.ts` | 保留并复用为 fallback 主体 |
 | 现有 `agentStore` 中 mood/error/resourceCards 字段 | 保留不变 |
 
