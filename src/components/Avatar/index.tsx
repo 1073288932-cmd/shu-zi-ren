@@ -1,35 +1,28 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useAgentStore } from '../../store/agentStore'
-import { lipSyncController } from '../../services/lipsync'
-import type { MouthShape } from '../../../shared/types'
 import characterImg from '../../assets/avatar/character.png'
 import styles from './Avatar.module.css'
 
-const MOUTH_CLASSES: Record<MouthShape, string> = {
-  closed: styles.mouthClosed,
-  slightlyOpen: styles.mouthSlightlyOpen,
-  ee: styles.mouthEe,
-  oh: styles.mouthOh,
-  ah: styles.mouthAh,
-  wide: styles.mouthWide,
-}
-
 interface AvatarProps {
+  onVideoEnded?: () => void
   children?: React.ReactNode
 }
 
-export function Avatar({ children }: AvatarProps) {
-  const mood = useAgentStore(state => state.mood)
-  const isPushing = useAgentStore(state => state.isPushing)
-  const mouthShape = useAgentStore(state => state.mouthShape)
-  const speakingIntensity = useAgentStore(state => state.speakingIntensity)
+export function Avatar({ onVideoEnded, children }: AvatarProps) {
+  const mood = useAgentStore(s => s.mood)
+  const isPushing = useAgentStore(s => s.isPushing)
+  const videoUrl = useAgentStore(s => s.videoUrl)
+  const videoQueueState = useAgentStore(s => s.videoQueueState)
+  const avatarVideoError = useAgentStore(s => s.avatarVideoError)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
 
+  // When videoUrl changes, ensure the video element loads + plays the new source
   useEffect(() => {
-    return () => { lipSyncController.stop() }
-  }, [])
-
-  const overlayScaleY = mouthShape === 'closed' ? 1 : speakingIntensity
-  const overlayOpacity = mouthShape === 'closed' ? 1 : Math.max(0.2, speakingIntensity)
+    const v = videoRef.current
+    if (!v || !videoUrl) return
+    v.load()
+    v.play().catch(() => {/* autoplay rejection is fine; user gesture is in input chain */})
+  }, [videoUrl])
 
   const wrapClass = [
     styles.characterWrap,
@@ -39,25 +32,35 @@ export function Avatar({ children }: AvatarProps) {
     isPushing ? styles.pushing : '',
   ].filter(Boolean).join(' ')
 
+  const showVideo = videoUrl && (videoQueueState === 'playing' || videoQueueState === 'stalled')
+
   return (
     <div className={styles.avatar}>
       <div className={wrapClass}>
-        <img
-          className={styles.characterImg}
-          src={characterImg}
-          alt="avatar"
-          draggable={false}
-        />
-        {mood === 'talking' && (
-          <div
-            className={`${styles.mouthOverlay} ${MOUTH_CLASSES[mouthShape]}`}
-            style={{
-              transform: `translateX(-50%) scaleY(${overlayScaleY})`,
-              opacity: overlayOpacity,
-            }}
+        {showVideo ? (
+          <video
+            ref={videoRef}
+            className={styles.characterVideo}
+            src={videoUrl}
+            autoPlay
+            playsInline
+            onEnded={onVideoEnded}
+          />
+        ) : (
+          <img
+            className={styles.characterImg}
+            src={characterImg}
+            alt="avatar"
+            draggable={false}
           />
         )}
+        {videoQueueState === 'stalled' && <div className={styles.stalledDots}>…</div>}
       </div>
+      {videoQueueState === 'blocked' && avatarVideoError?.code === 'POLICY_VIOLATION' && (
+        <div className={styles.blockedNotice}>
+          此回答未通过数字人内容审核，请调整提问后重试
+        </div>
+      )}
       {children}
     </div>
   )

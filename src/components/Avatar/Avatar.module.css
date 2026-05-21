@@ -1,4 +1,3 @@
-/* ── Layout ─────────────────────────────────────────────────────────── */
 .avatar {
   display: flex;
   flex-direction: column;
@@ -6,14 +5,8 @@
   padding: 8px 0 8px;
   position: relative;
   flex-shrink: 0;
-
-  /* Mouth overlay calibration — adjust these to match the character image */
-  --mouth-x: 50%;
-  --mouth-y: 27%;
-  --mouth-w: 7%;
 }
 
-/* ── Character image container ──────────────────────────────────────── */
 .characterWrap {
   position: relative;
   width: 240px;
@@ -24,7 +17,8 @@
   animation: idle-float 3s ease-in-out infinite;
 }
 
-.characterImg {
+.characterImg,
+.characterVideo {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -33,57 +27,79 @@
   pointer-events: none;
 }
 
-/* ── Mouth overlay base — position driven by CSS vars ───────────────── */
-.mouthOverlay {
+.stalledDots {
   position: absolute;
-  left: var(--mouth-x);
-  top: var(--mouth-y);
-  transform-origin: center top;
-  /* translateX centering + scaleY driven by speakingIntensity (inline style) */
-  width: var(--mouth-w);
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 24px;
+  color: rgba(255, 255, 255, 0.6);
+  letter-spacing: 4px;
+  animation: stalled-blink 1.2s ease-in-out infinite;
   pointer-events: none;
 }
 
-/* ── 6 mouth shape classes (base size; scaled by intensity inline) ──── */
-.mouthClosed {
-  height: 2px;
-  background: #7a3018;
-  border-radius: 2px;
+@keyframes stalled-blink {
+  0%, 100% { opacity: 0.3; }
+  50%       { opacity: 0.9; }
 }
 
-.mouthSlightlyOpen {
-  height: 5px;
-  background: #7a2a10;
-  border-radius: 3px 3px 6px 6px;
+.blockedNotice {
+  margin-top: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: #fda4af;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 8px;
+  text-align: center;
+  max-width: 280px;
 }
 
-.mouthEe {
-  width: calc(var(--mouth-w) * 1.3);
-  height: 4px;
-  background: #883020;
-  border-radius: 4px;
+@keyframes idle-float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-5px); }
 }
 
-.mouthOh {
-  width: calc(var(--mouth-w) * 0.65);
-  height: 10px;
-  background: #742010;
-  border-radius: 50%;
+.thinking { animation: thinking-pulse 0.9s ease-in-out infinite; }
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.7; transform: scale(0.96); }
 }
 
-.mouthAh {
-  height: 14px;
-  background: #681808;
-  border-radius: 5px 5px 42% 42%;
+.talking { animation: talking-bob 0.5s ease-in-out infinite alternate; }
+@keyframes talking-bob {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-2px); }
 }
 
-.mouthWide {
-  height: 17px;
-  background: #5a1005;
-  border-radius: 6px 6px 50% 50%;
+.error { animation: error-shake 0.45s ease-in-out forwards; }
+@keyframes error-shake {
+  0%, 100% { transform: translateX(0); }
+  20%     { transform: translateX(-5px); }
+  40%     { transform: translateX(5px); }
+  60%     { transform: translateX(-4px); }
+  80%     { transform: translateX(4px); }
 }
 
-/* ── Status badge ───────────────────────────────────────────────────── */
+.pushing { animation: pushing-bounce 0.55s ease-in-out infinite alternate; }
+@keyframes pushing-bounce {
+  from { transform: translateY(0) rotate(0deg); }
+  to   { transform: translateY(-8px) rotate(3deg); }
+}
+
+.pushingFlag {
+  position: absolute;
+  top: 8px;
+  right: 24px;
+  font-size: 18px;
+  animation: flag-wave 0.6s ease-in-out infinite alternate;
+}
+@keyframes flag-wave {
+  from { transform: rotate(-10deg); }
+  to   { transform: rotate(10deg); }
+}
+
 .statusBadge {
   margin-top: 4px;
   font-size: 11px;
@@ -95,60 +111,4 @@
   display: flex;
   align-items: center;
   gap: 4px;
-}
-
-/* ── Mood animations — applied to .characterWrap ────────────────────── */
-/* idle-float is the default (defined on .characterWrap above) */
-@keyframes idle-float {
-  0%, 100% { transform: translateY(0); }
-  50%       { transform: translateY(-5px); }
-}
-
-.thinking {
-  animation: thinking-pulse 0.9s ease-in-out infinite;
-}
-@keyframes thinking-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50%       { opacity: 0.7; transform: scale(0.96); }
-}
-
-/* talking: subtle head bob — lip movement comes from LipSyncController */
-.talking {
-  animation: talking-bob 0.5s ease-in-out infinite alternate;
-}
-@keyframes talking-bob {
-  from { transform: translateY(0); }
-  to   { transform: translateY(-2px); }
-}
-
-.error {
-  animation: error-shake 0.45s ease-in-out forwards;
-}
-@keyframes error-shake {
-  0%,100% { transform: translateX(0); }
-  20%     { transform: translateX(-5px); }
-  40%     { transform: translateX(5px); }
-  60%     { transform: translateX(-4px); }
-  80%     { transform: translateX(4px); }
-}
-
-.pushing {
-  animation: pushing-bounce 0.55s ease-in-out infinite alternate;
-}
-@keyframes pushing-bounce {
-  from { transform: translateY(0) rotate(0deg); }
-  to   { transform: translateY(-8px) rotate(3deg); }
-}
-
-/* ── Pushing flag ───────────────────────────────────────────────────── */
-.pushingFlag {
-  position: absolute;
-  top: 8px;
-  right: 24px;
-  font-size: 18px;
-  animation: flag-wave 0.6s ease-in-out infinite alternate;
-}
-@keyframes flag-wave {
-  from { transform: rotate(-10deg); }
-  to   { transform: rotate(10deg); }
 }
