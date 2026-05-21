@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AvatarMood, MouthShape, MouthState, AgentMessage, ResourceCard, AppError } from '@shared/types'
+import type { AvatarMood, MouthShape, MouthState, AgentMessage, ResourceCard, AppError, VideoQueueState } from '@shared/types'
 
 interface AgentStoreState {
   mood: AvatarMood
@@ -13,6 +13,9 @@ interface AgentStoreState {
   messages: AgentMessage[]
   resourceCards: ResourceCard[]
   selectedResourceId: string | null
+  videoUrl: string | null
+  videoQueueState: VideoQueueState
+  avatarVideoError: AppError | null
 
   setMood: (mood: AvatarMood) => void
   setIsPushing: (isPushing: boolean) => void
@@ -25,6 +28,9 @@ interface AgentStoreState {
   setResourceCards: (cards: ResourceCard[]) => void
   removeResourceCard: (id: string) => void
   setSelectedResourceId: (id: string | null) => void
+  setVideoUrl: (url: string | null) => void
+  setVideoQueueState: (state: VideoQueueState) => void
+  setAvatarVideoError: (error: AppError | null) => void
   reset: () => void
 }
 
@@ -40,6 +46,9 @@ export const initialState = {
   messages: [] as AgentMessage[],
   resourceCards: [] as ResourceCard[],
   selectedResourceId: null as string | null,
+  videoUrl: null as string | null,
+  videoQueueState: 'idle' as VideoQueueState,
+  avatarVideoError: null as AppError | null,
 }
 
 export const useAgentStore = create<AgentStoreState>()(set => ({
@@ -58,5 +67,8 @@ export const useAgentStore = create<AgentStoreState>()(set => ({
   removeResourceCard: id =>
     set(state => ({ resourceCards: state.resourceCards.filter(c => c.id !== id) })),
   setSelectedResourceId: selectedResourceId => set({ selectedResourceId }),
+  setVideoUrl: videoUrl => set({ videoUrl }),
+  setVideoQueueState: videoQueueState => set({ videoQueueState }),
+  setAvatarVideoError: avatarVideoError => set({ avatarVideoError }),
   reset: () => set(initialState),
 }))
