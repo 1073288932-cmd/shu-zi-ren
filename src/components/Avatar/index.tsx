@@ -1,11 +1,12 @@
 import { useEffect, useRef } from 'react'
+import type { ReactNode } from 'react'
 import { useAgentStore } from '../../store/agentStore'
 import characterImg from '../../assets/avatar/character.png'
 import styles from './Avatar.module.css'
 
 interface AvatarProps {
   onVideoEnded?: () => void
-  children?: React.ReactNode
+  children?: ReactNode
 }
 
 export function Avatar({ onVideoEnded, children }: AvatarProps) {
@@ -42,7 +43,6 @@ export function Avatar({ onVideoEnded, children }: AvatarProps) {
             ref={videoRef}
             className={styles.characterVideo}
             src={videoUrl}
-            autoPlay
             playsInline
             onEnded={onVideoEnded}
           />
