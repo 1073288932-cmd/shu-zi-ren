@@ -162,7 +162,9 @@ export function useAvatarVideoQueue(): UseAvatarVideoQueue {
     }
 
     useAgentStore.setState({ videoQueueState: 'generating' })
+    const myGen = genRef.current
     const result = await avatarVideoProvider.generate(segmentsRef.current[0])
+    if (myGen !== genRef.current) return
     if (!result.ok) {
       fallbackRemaining(result.error)
       return

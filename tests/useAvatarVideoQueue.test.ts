@@ -239,16 +239,18 @@ describe('useAvatarVideoQueue — fallback & blocked & circuit breaker', () => {
     expect(mockSpeak).not.toHaveBeenCalled()
   })
 
-  it('first-segment 12s timeout → fallback', async () => {
-    vi.useFakeTimers()
-    mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
-    const { result } = renderHook(() => useAvatarVideoQueue())
-    await act(async () => { await result.current.enqueue('hi.') })
-    await act(async () => { await vi.advanceTimersByTimeAsync(12_000 + 50) })
-    expect(mockCancel).toHaveBeenCalledWith('j1')
-    expect(useAgentStore.getState().videoQueueState).toBe('fallback')
-    expect(mockSpeak).toHaveBeenCalledWith('hi.')
-    vi.useRealTimers()
+  describe('first-segment 12s timeout → fallback', () => {
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+    it('fires fallback after FIRST_SEGMENT_TIMEOUT_MS', async () => {
+      mockGenerate.mockResolvedValue({ ok: true, jobId: 'j1' })
+      const { result } = renderHook(() => useAvatarVideoQueue())
+      await act(async () => { await result.current.enqueue('hi.') })
+      await act(async () => { await vi.advanceTimersByTimeAsync(12_000 + 50) })
+      expect(mockCancel).toHaveBeenCalledWith('j1')
+      expect(useAgentStore.getState().videoQueueState).toBe('fallback')
+      expect(mockSpeak).toHaveBeenCalledWith('hi.')
+    })
   })
 
   it('circuit breaker: 3 consecutive failures → next enqueue goes straight to Web Speech', async () => {
