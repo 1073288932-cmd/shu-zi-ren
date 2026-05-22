@@ -77,4 +77,19 @@ describe('agentStore', () => {
     expect(s.mood).toBe('idle')
     expect(s.messages).toHaveLength(0)
   })
+
+  it('currentViseme starts as closed', () => {
+    expect(useAgentStore.getState().currentViseme).toBe('closed')
+  })
+
+  it('setCurrentViseme updates the viseme', () => {
+    useAgentStore.getState().setCurrentViseme('a')
+    expect(useAgentStore.getState().currentViseme).toBe('a')
+  })
+
+  it('reset restores currentViseme to closed', () => {
+    useAgentStore.getState().setCurrentViseme('o')
+    useAgentStore.getState().reset()
+    expect(useAgentStore.getState().currentViseme).toBe('closed')
+  })
 })

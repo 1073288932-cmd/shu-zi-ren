@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AvatarMood, AgentMessage, ResourceCard, AppError, VideoQueueState } from '@shared/types'
+import type { AvatarMood, AgentMessage, ResourceCard, AppError, VideoQueueState, Viseme } from '@shared/types'
 
 interface AgentStoreState {
   mood: AvatarMood
@@ -14,6 +14,7 @@ interface AgentStoreState {
   videoUrl: string | null
   videoQueueState: VideoQueueState
   avatarVideoError: AppError | null
+  currentViseme: Viseme
 
   setMood: (mood: AvatarMood) => void
   setIsPushing: (isPushing: boolean) => void
@@ -28,6 +29,7 @@ interface AgentStoreState {
   setVideoUrl: (url: string | null) => void
   setVideoQueueState: (state: VideoQueueState) => void
   setAvatarVideoError: (error: AppError | null) => void
+  setCurrentViseme: (viseme: Viseme) => void
   reset: () => void
 }
 
@@ -44,6 +46,7 @@ export const initialState = {
   videoUrl: null as string | null,
   videoQueueState: 'idle' as VideoQueueState,
   avatarVideoError: null as AppError | null,
+  currentViseme: 'closed' as Viseme,
 }
 
 export const useAgentStore = create<AgentStoreState>()(set => ({
@@ -63,5 +66,6 @@ export const useAgentStore = create<AgentStoreState>()(set => ({
   setVideoUrl: videoUrl => set({ videoUrl }),
   setVideoQueueState: videoQueueState => set({ videoQueueState }),
   setAvatarVideoError: avatarVideoError => set({ avatarVideoError }),
+  setCurrentViseme: currentViseme => set({ currentViseme }),
   reset: () => set(initialState),
 }))
