@@ -820,7 +820,9 @@ const mockResponse: AIResponse = {
 describe('useAI', () => {
   beforeEach(() => {
     mockChat.mockResolvedValue(mockResponse)
-    mockSpeak.mockResolvedValue(undefined)
+    // 默认 speak 永不 resolve：否则 act() 会把 finishTalking 一并 drain，
+    // 导致 mood 在断言前就回到 idle。需要 resolve 的用例自行 override。
+    mockSpeak.mockReturnValue(new Promise<void>(() => {}))
     vi.useFakeTimers()
     useAgentStore.setState(initialState)
   })
