@@ -1,29 +1,35 @@
-import { useEffect, useRef } from 'react'
-import type { ReactNode } from 'react'
+import { useEffect } from 'react'
 import { useAgentStore } from '../../store/agentStore'
+import type { Viseme } from '@shared/types'
 import characterImg from '../../assets/avatar/character.png'
+import closedPng from '../../assets/avatar/visemes/closed.png'
+import aPng from '../../assets/avatar/visemes/a.png'
+import oPng from '../../assets/avatar/visemes/o.png'
+import ePng from '../../assets/avatar/visemes/e.png'
+import iPng from '../../assets/avatar/visemes/i.png'
+import uPng from '../../assets/avatar/visemes/u.png'
 import styles from './Avatar.module.css'
 
-interface AvatarProps {
-  onVideoEnded?: () => void
-  children?: ReactNode
+const VISEME_SRC: Record<Viseme, string> = {
+  closed: closedPng,
+  a: aPng,
+  o: oPng,
+  e: ePng,
+  i: iPng,
+  u: uPng,
 }
 
-export function Avatar({ onVideoEnded, children }: AvatarProps) {
+export function Avatar() {
   const mood = useAgentStore(s => s.mood)
   const isPushing = useAgentStore(s => s.isPushing)
-  const videoUrl = useAgentStore(s => s.videoUrl)
-  const videoQueueState = useAgentStore(s => s.videoQueueState)
-  const avatarVideoError = useAgentStore(s => s.avatarVideoError)
-  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const currentViseme = useAgentStore(s => s.currentViseme)
+  const setCurrentViseme = useAgentStore(s => s.setCurrentViseme)
 
-  // When videoUrl changes, ensure the video element loads + plays the new source
+  // 防御性 cleanup：Avatar 是常驻组件，实际只在热重载 / 应用退出时触发。
+  // controller 生命周期由 useAI 负责（spec Section 9 约束 1），此处不调 stop()。
   useEffect(() => {
-    const v = videoRef.current
-    if (!v || !videoUrl) return
-    v.load()
-    v.play().catch(() => {/* autoplay rejection is fine; user gesture is in input chain */})
-  }, [videoUrl])
+    return () => { setCurrentViseme('closed') }
+  }, [setCurrentViseme])
 
   const wrapClass = [
     styles.characterWrap,
@@ -33,35 +39,12 @@ export function Avatar({ onVideoEnded, children }: AvatarProps) {
     isPushing ? styles.pushing : '',
   ].filter(Boolean).join(' ')
 
-  const showVideo = videoUrl && (videoQueueState === 'playing' || videoQueueState === 'stalled')
-
   return (
     <div className={styles.avatar}>
       <div className={wrapClass}>
-        {showVideo ? (
-          <video
-            ref={videoRef}
-            className={styles.characterVideo}
-            src={videoUrl}
-            playsInline
-            onEnded={onVideoEnded}
-          />
-        ) : (
-          <img
-            className={styles.characterImg}
-            src={characterImg}
-            alt="avatar"
-            draggable={false}
-          />
-        )}
-        {videoQueueState === 'stalled' && <div className={styles.stalledDots}>…</div>}
+        <img className={styles.characterImg} src={characterImg} alt="avatar" draggable={false} />
+        <img className={styles.mouthOverlay} src={VISEME_SRC[currentViseme]} alt="" draggable={false} />
       </div>
-      {videoQueueState === 'blocked' && avatarVideoError?.code === 'POLICY_VIOLATION' && (
-        <div className={styles.blockedNotice}>
-          此回答未通过数字人内容审核，请调整提问后重试
-        </div>
-      )}
-      {children}
     </div>
   )
 }

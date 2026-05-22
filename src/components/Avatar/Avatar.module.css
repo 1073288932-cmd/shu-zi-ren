@@ -15,10 +15,15 @@
   align-items: center;
   justify-content: center;
   animation: idle-float 3s ease-in-out infinite;
+
+  /* 嘴型 overlay 校准变量 —— 在最终验收时手动调到对齐角色嘴部。
+     --mouth-w 控制 overlay 屏幕显示尺寸（不得在 TS 里写死像素）。 */
+  --mouth-x: 50%;
+  --mouth-y: 62%;
+  --mouth-w: 22%;
 }
 
-.characterImg,
-.characterVideo {
+.characterImg {
   width: 100%;
   height: 100%;
   object-fit: contain;
@@ -27,33 +32,16 @@
   pointer-events: none;
 }
 
-.stalledDots {
+.mouthOverlay {
   position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-size: 24px;
-  color: rgba(255, 255, 255, 0.6);
-  letter-spacing: 4px;
-  animation: stalled-blink 1.2s ease-in-out infinite;
+  left: var(--mouth-x);
+  top: var(--mouth-y);
+  width: var(--mouth-w);
+  height: auto;            /* 由 <img> 按 256:128 自动保持比例 */
+  transform: translate(-50%, -50%);
   pointer-events: none;
-}
-
-@keyframes stalled-blink {
-  0%, 100% { opacity: 0.3; }
-  50%       { opacity: 0.9; }
-}
-
-.blockedNotice {
-  margin-top: 8px;
-  padding: 6px 10px;
-  font-size: 12px;
-  color: #fda4af;
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.4);
-  border-radius: 8px;
-  text-align: center;
-  max-width: 280px;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 @keyframes idle-float {
@@ -86,29 +74,4 @@
 @keyframes pushing-bounce {
   from { transform: translateY(0) rotate(0deg); }
   to   { transform: translateY(-8px) rotate(3deg); }
-}
-
-.pushingFlag {
-  position: absolute;
-  top: 8px;
-  right: 24px;
-  font-size: 18px;
-  animation: flag-wave 0.6s ease-in-out infinite alternate;
-}
-@keyframes flag-wave {
-  from { transform: rotate(-10deg); }
-  to   { transform: rotate(10deg); }
-}
-
-.statusBadge {
-  margin-top: 4px;
-  font-size: 11px;
-  color: #7dd3fc;
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
-  padding: 2px 10px;
-  min-height: 20px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }

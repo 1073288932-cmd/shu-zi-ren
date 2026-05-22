@@ -10,13 +10,13 @@ import styles from './App.module.css'
 export default function App() {
   const resourceCards = useAgentStore(state => state.resourceCards)
   const shellRef = useRef<HTMLDivElement>(null)
-  const { sendMessage, retry, handleVideoEnded } = useAI()
+  const { sendMessage, retry } = useAI()
 
   useAutoResizeWindow(shellRef)
 
   return (
     <div className={styles.shell} ref={shellRef}>
-      <Avatar onVideoEnded={handleVideoEnded} />
+      <Avatar />
 
       {resourceCards.length > 0 && (
         <>
