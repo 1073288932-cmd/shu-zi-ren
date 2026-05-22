@@ -37,30 +37,4 @@ contextBridge.exposeInMainWorld('electronAPI', {
   transcribeAudio(buffer: ArrayBuffer): Promise<import('../shared/types').AppError | string> {
     return ipcRenderer.invoke('transcribe-audio', buffer)
   },
-
-  generateAvatarSegment(ssml: string): Promise<{ ok: true; jobId: string } | { ok: false; error: AppError }> {
-    return ipcRenderer.invoke('avatar-video:generate', ssml)
-  },
-
-  cancelAvatarSegment(jobId: string): void {
-    ipcRenderer.send('avatar-video:cancel', jobId)
-  },
-
-  onAvatarSegmentProgress(cb: (e: import('../shared/types').AvatarSegmentProgressEvent) => void): () => void {
-    const handler = (_: unknown, e: import('../shared/types').AvatarSegmentProgressEvent) => cb(e)
-    ipcRenderer.on('avatar-video:progress', handler)
-    return () => ipcRenderer.removeListener('avatar-video:progress', handler)
-  },
-
-  onAvatarSegmentDone(cb: (e: import('../shared/types').AvatarSegmentDoneEvent) => void): () => void {
-    const handler = (_: unknown, e: import('../shared/types').AvatarSegmentDoneEvent) => cb(e)
-    ipcRenderer.on('avatar-video:done', handler)
-    return () => ipcRenderer.removeListener('avatar-video:done', handler)
-  },
-
-  onAvatarSegmentError(cb: (e: import('../shared/types').AvatarSegmentErrorEvent) => void): () => void {
-    const handler = (_: unknown, e: import('../shared/types').AvatarSegmentErrorEvent) => cb(e)
-    ipcRenderer.on('avatar-video:error', handler)
-    return () => ipcRenderer.removeListener('avatar-video:error', handler)
-  },
 })

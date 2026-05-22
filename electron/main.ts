@@ -12,10 +12,6 @@ import { validateChatMessages } from './services/validateChatMessages'
 import { mapDeepseekError } from './services/mapDeepseekError'
 import { handleTranscribeAudio } from './services/transcribeAudioHandler'
 import type { AppError } from '../shared/types'
-import { TencentCosClient } from './services/TencentCosClient'
-import { TencentDigitalHumanService } from './services/TencentDigitalHumanService'
-import { runAvatarSegmentJob, validateSsml, type JobDeps, type JobEvents } from './services/avatarVideoHandler'
-import { randomUUID } from 'crypto'
 
 // MVP: hardcoded resource whitelist. Replace with config file loader later.
 const RESOURCE_BASE_DIR = path.join(app.getPath('home'), 'Desktop')
@@ -34,68 +30,6 @@ if (missingIds.length > 0) {
 
 let apiKey = ''
 let deepseekProvider!: DeepseekAIProvider
-
-let cosClient: TencentCosClient | null = null
-let cachedRefPhotoUrl: Promise<string> | null = null
-let dhService: TencentDigitalHumanService | null = null
-const inFlightJobs = new Map<string, AbortController>()
-
-function readConfigJson(): Record<string, unknown> {
-  const p = path.join(app.getPath('userData'), 'config.json')
-  try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as Record<string, unknown> } catch { return {} }
-}
-function writeConfigJson(next: Record<string, unknown>): void {
-  const p = path.join(app.getPath('userData'), 'config.json')
-  fs.writeFileSync(p, JSON.stringify(next, null, 2), 'utf-8')
-}
-
-function resolveAvatarImagePath(): string {
-  return path.join(__dirname, '..', 'resources', 'avatar', 'character.png')
-}
-
-function initAvatarVideoServices(): void {
-  const ivhAppkey = process.env.TENCENT_IVH_APPKEY ?? ''
-  const ivhAccesstoken = process.env.TENCENT_IVH_ACCESSTOKEN ?? ''
-  const ivhEndpoint = process.env.TENCENT_IVH_ENDPOINT ?? 'gw.tvs.qq.com'
-
-  if (!ivhAppkey || !ivhAccesstoken) {
-    console.warn('[avatar-video] IVH appkey/accesstoken missing — video disabled, Web Speech fallback active')
-    return
-  }
-
-  const secretId = process.env.TENCENT_SECRET_ID ?? ''
-  const secretKey = process.env.TENCENT_SECRET_KEY ?? ''
-  const cosRegion = process.env.TENCENT_COS_REGION ?? 'ap-shanghai'
-  const cosBucket = process.env.TENCENT_COS_BUCKET ?? ''
-  const useSignedUrl = (process.env.TENCENT_COS_USE_SIGNED_URL ?? 'true') !== 'false'
-
-  if (!secretId || !secretKey || !cosBucket) {
-    console.warn('[avatar-video] COS credentials or bucket missing — video disabled')
-    return
-  }
-
-  cosClient = new TencentCosClient(
-    { secretId, secretKey, region: cosRegion, bucket: cosBucket, useSignedUrl },
-    { read: readConfigJson, write: writeConfigJson }
-  )
-  dhService = new TencentDigitalHumanService({
-    appkey: ivhAppkey,
-    accesstoken: ivhAccesstoken,
-    endpoint: ivhEndpoint,
-  })
-
-  const characterPath = resolveAvatarImagePath()
-  cachedRefPhotoUrl = (async () => {
-    try {
-      const buf = fs.readFileSync(characterPath)
-      return await cosClient!.ensureRefPhotoUrl(buf)
-    } catch (err) {
-      console.error('[avatar-video] COS upload failed:', err)
-      throw { code: 'COS_NOT_READY', message: String(err), recoverable: true } as AppError
-    }
-  })()
-  cachedRefPhotoUrl.catch(() => {/* don't crash main */})
-}
 
 function reloadApiKey(): void {
   apiKey = process.env.DEEPSEEK_API_KEY ?? ''
@@ -161,7 +95,6 @@ app.whenReady().then(() => {
     callback(permission === 'media')
   })
   createWindow()
-  initAvatarVideoServices()
 })
 
 app.on('window-all-closed', () => {
@@ -257,49 +190,3 @@ ipcMain.handle('chat', async (event, messages: unknown) => {
   }
 })
 
-ipcMain.handle('avatar-video:generate', async (event, ssml: unknown): Promise<{ ok: true; jobId: string } | { ok: false; error: AppError }> => {
-  if (!BrowserWindow.fromWebContents(event.sender)) {
-    return { ok: false, error: { code: 'AI_ERROR', message: 'invalid sender', recoverable: false } }
-  }
-  if (!dhService || !cachedRefPhotoUrl) {
-    return { ok: false, error: { code: 'COS_NOT_READY', message: '数智人服务未初始化', recoverable: true } }
-  }
-  const v = validateSsml(ssml)
-  if (!v.ok) return { ok: false, error: v.error }
-
-  const jobId = randomUUID()
-  const controller = new AbortController()
-  inFlightJobs.set(jobId, controller)
-
-  const deps: JobDeps = {
-    getRefPhotoUrl: () => cachedRefPhotoUrl!,
-    submitTask: (url, text, signal) => dhService!.submitPhotoToVideoNoTrain({ refPhotoUrl: url, ssml: text }, signal),
-    pollUntilDone: (taskId, signal, onAttempt) => dhService!.pollUntilDone(taskId, signal, onAttempt),
-    downloadVideo: (url, signal) => dhService!.downloadVideo(url, signal),
-  }
-  const events: JobEvents = {
-    progress: e => event.sender.send('avatar-video:progress', e),
-    done: e => {
-      event.sender.send('avatar-video:done', e)
-      inFlightJobs.delete(jobId)
-    },
-    error: e => {
-      event.sender.send('avatar-video:error', e)
-      inFlightJobs.delete(jobId)
-    },
-  }
-  runAvatarSegmentJob({ jobId, ssml: v.value }, deps, events, controller).catch(() => {
-    inFlightJobs.delete(jobId)
-  })
-
-  return { ok: true, jobId }
-})
-
-ipcMain.on('avatar-video:cancel', (_event, jobId: unknown) => {
-  if (typeof jobId !== 'string') return
-  const ctrl = inFlightJobs.get(jobId)
-  if (ctrl) {
-    ctrl.abort()
-    inFlightJobs.delete(jobId)
-  }
-})
