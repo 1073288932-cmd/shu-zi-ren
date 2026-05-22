@@ -912,6 +912,23 @@ describe('useAI', () => {
     expect(mockLipStop).toHaveBeenCalled()
   })
 
+  it('stale TTS resolving after a new message does not clobber the current one', async () => {
+    let resolveFirst!: () => void
+    mockSpeak.mockReturnValueOnce(new Promise<void>(r => { resolveFirst = r }))
+    mockSpeak.mockReturnValueOnce(new Promise<void>(() => {}))
+    const { result } = renderHook(() => useAI())
+    await act(async () => { result.current.sendMessage('first'); await vi.runAllTicks() })
+    await act(async () => { result.current.sendMessage('second'); await vi.runAllTicks() })
+    expect(useAgentStore.getState().mood).toBe('talking')
+
+    mockLipStop.mockClear()
+    // 现在才 resolve 第一条（已过期的）speak promise
+    await act(async () => { resolveFirst(); await vi.runAllTicks() })
+
+    expect(mockLipStop).not.toHaveBeenCalled()       // stale finishTalking 必须是 no-op
+    expect(useAgentStore.getState().mood).toBe('talking')
+  })
+
   it('stops lip-sync on AI failure', async () => {
     mockChat.mockRejectedValueOnce(new Error('network error'))
     const { result } = renderHook(() => useAI())
@@ -929,8 +946,10 @@ Expected: FAIL —— 当前 `useAI.ts` 仍引用 `useAvatarVideoQueue`，与新
 
 - [ ] **Step 3: 整体替换 src/hooks/useAI.ts**
 
+> **generation guard 范围（重要）：** guard 只用于 `finishTalking`（`speak()` 的 resolve/reject 回调）——它在 promise 异步 resolve 后才跑，可能 stale。AI 调用失败的 `try/catch` 全程在 `isLoading=true` 下串行执行、不可能 stale，**不要**给它加 `if (gen !== myGen) return`：那是死代码，且会在逻辑变动时有跳过 `setIsLoading(false)` 卡死 loading 的风险。
+
 ```ts
-import { useCallback } from 'react'
+import { useCallback, useRef } from 'react'
 import { useAgentStore } from '../store/agentStore'
 import { aiProvider } from '../services/ai'
 import { ttsProvider } from '../services/tts'
@@ -939,8 +958,13 @@ import { isAppError } from '../services/ai/ElectronAIProvider'
 import type { AppError } from '@shared/types'
 
 export function useAI() {
+  const generationRef = useRef(0)
+
   const sendMessage = useCallback(async (text: string) => {
     if (useAgentStore.getState().isLoading) return
+
+    // generation guard：防止过期 TTS 回调清掉新一轮的口型/状态
+    const myGen = ++generationRef.current
 
     // 新一轮开始前，停掉上一条的 TTS 与口型（spec Section 9 约束 1）
     ttsProvider.stop()
@@ -967,6 +991,8 @@ export function useAI() {
       lipSyncController.start(response.reply, useAgentStore.getState().setCurrentViseme)
 
       const finishTalking = () => {
+        // 过期回调（已开始更新的一轮）直接忽略，避免清掉当前口型/状态
+        if (generationRef.current !== myGen) return
         lipSyncController.stop()
         const st = useAgentStore.getState()
         st.setMood('idle')
@@ -974,6 +1000,7 @@ export function useAI() {
       }
       ttsProvider.speak(response.reply).then(finishTalking, finishTalking)
     } catch (err: unknown) {
+      // 此 catch 全程在 isLoading=true 下串行，不会 stale —— 不加 generation guard
       const appError: AppError = isAppError(err)
         ? (err as AppError)
         : { code: 'AI_ERROR', message: err instanceof Error ? err.message : String(err), recoverable: true }
@@ -1000,7 +1027,7 @@ export function useAI() {
 - [ ] **Step 4: 运行测试，确认通过**
 
 Run: `npx vitest run tests/useAI.test.ts --pool=forks --poolOptions.forks.singleFork=true`
-Expected: 9 个测试全部 PASS。
+Expected: 10 个测试全部 PASS。
 
 - [ ] **Step 5: 类型检查**
 
@@ -1473,9 +1500,9 @@ npm run build
 
 Expected：类型检查无错误；全部测试 PASS；构建成功。（`dist/`、`dist-electron/` 为构建产物，不要提交。）
 
-- [ ] **Step 2: 确认最终美术稿就位**
+- [ ] **Step 2: 确认最终美术稿就位（硬性验收门槛）**
 
-确认 `src/assets/avatar/visemes/` 下 6 张是**真实嘴型美术稿**（非 Task 4 的品红占位图）。若仍是占位图，向用户索取最终素材后替换并重新 `npm run build`。
+确认 `src/assets/avatar/visemes/` 下 6 张是**真实嘴型美术稿**（非 Task 4 的品红占位图）。**这是硬性验收门槛：只要仍是占位图，本功能即不算验收通过，不得进入 code review、不得合并 PR。** 若仍是占位图，向用户索取最终素材后替换、重新 `npm run build`，并重做 Step 3 / Step 4。
 
 - [ ] **Step 3: 手动冒烟测试**
 
