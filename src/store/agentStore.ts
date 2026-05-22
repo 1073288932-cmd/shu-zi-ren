@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AvatarMood, AgentMessage, ResourceCard, AppError, VideoQueueState, Viseme } from '@shared/types'
+import type { AvatarMood, AgentMessage, ResourceCard, AppError, Viseme } from '@shared/types'
 
 interface AgentStoreState {
   mood: AvatarMood
@@ -11,9 +11,6 @@ interface AgentStoreState {
   messages: AgentMessage[]
   resourceCards: ResourceCard[]
   selectedResourceId: string | null
-  videoUrl: string | null
-  videoQueueState: VideoQueueState
-  avatarVideoError: AppError | null
   currentViseme: Viseme
 
   setMood: (mood: AvatarMood) => void
@@ -26,9 +23,6 @@ interface AgentStoreState {
   setResourceCards: (cards: ResourceCard[]) => void
   removeResourceCard: (id: string) => void
   setSelectedResourceId: (id: string | null) => void
-  setVideoUrl: (url: string | null) => void
-  setVideoQueueState: (state: VideoQueueState) => void
-  setAvatarVideoError: (error: AppError | null) => void
   setCurrentViseme: (viseme: Viseme) => void
   reset: () => void
 }
@@ -43,9 +37,6 @@ export const initialState = {
   messages: [] as AgentMessage[],
   resourceCards: [] as ResourceCard[],
   selectedResourceId: null as string | null,
-  videoUrl: null as string | null,
-  videoQueueState: 'idle' as VideoQueueState,
-  avatarVideoError: null as AppError | null,
   currentViseme: 'closed' as Viseme,
 }
 
@@ -63,9 +54,6 @@ export const useAgentStore = create<AgentStoreState>()(set => ({
   removeResourceCard: id =>
     set(state => ({ resourceCards: state.resourceCards.filter(c => c.id !== id) })),
   setSelectedResourceId: selectedResourceId => set({ selectedResourceId }),
-  setVideoUrl: videoUrl => set({ videoUrl }),
-  setVideoQueueState: videoQueueState => set({ videoQueueState }),
-  setAvatarVideoError: avatarVideoError => set({ avatarVideoError }),
   setCurrentViseme: currentViseme => set({ currentViseme }),
   reset: () => set(initialState),
 }))
