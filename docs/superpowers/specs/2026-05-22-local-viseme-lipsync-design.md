@@ -47,7 +47,11 @@ ttsProvider.speak() resolve / reject
 | `Avatar` | 按 `currentViseme` 渲染 overlay | 计时、文本解析 |
 | `useAI` | 串联 TTS 与 LipSyncController 生命周期 | viseme 计算 |
 
-**LipSyncController 与 TTS 的同步方式：** 固定间隔步进。`speechSynthesis` 不提供音素/边界事件（中文环境 `boundary` 事件在 Electron/Chromium 不可靠），因此 viseme 序列按固定间隔 `STEP_INTERVAL` 推进，**生命周期由 TTS 的 `onstart`/`onend`（即 `speak()` 的 resolve/reject）兜底**。序列长度与语音时长不会精确相等：序列短于语音时循环重播，长于语音时被 `stop()` 截断——两种情况都可接受。
+**LipSyncController 与 TTS 的同步方式（MVP 策略）：** 固定间隔步进。`speechSynthesis` 不提供音素/边界事件（中文环境 `boundary` 事件在 Electron/Chromium 不可靠）。
+
+**本轮明确不扩展 `TTSProvider` 接口**（不新增 `onStart` 之类回调）。同步策略：AI 回复到达后**立即**调用 `lipSyncController.start()`，紧接着调用 `ttsProvider.speak()`——两者并行启动，不等待 TTS 真正出声。`speak()` 的 Promise **resolve / reject** 是唯一的收尾信号，触发 `lipSyncController.stop()`。
+
+已知取舍：WebSpeech 真正出声前有微小延迟，嘴可能比声音早动几十毫秒——MVP 接受此偏差，不为消除它扩展接口。viseme 序列长度与语音时长也不会精确相等：序列短于语音时循环重播，长于语音时被 `stop()` 截断——两种情况都可接受。
 
 ---
 
@@ -194,7 +198,7 @@ export class LipSyncController {
 - 嘴部 overlay `<img>` 始终渲染，`src` 按 `useAgentStore(s => s.currentViseme)` 从 6 张 viseme PNG 的 `Record<Viseme, string>` 中选取。idle 时 `currentViseme` 为 `closed`，overlay 显示闭口图。
 - 删除原 `<video>` 分支、`videoUrl` / `videoQueueState` / `avatarVideoError` 订阅、`onVideoEnded` prop。
 - 保留 mood/pushing 的 body 动画 class（作用于角色容器，与 viseme 无关）。
-- `useEffect` cleanup 调用 `lipSyncController.stop()`（见 Section 9 约束 1）。
+- **Avatar 不持有全局 controller 生命周期。** Avatar 是常驻组件，其 `useEffect` cleanup 仅作防御性处理：最多 `setCurrentViseme('closed')`，**不调用 `lipSyncController.stop()`**。controller 的 `stop()` 由 `useAI` 负责（见 Section 9 约束 1）。
 
 **CSS（`src/components/Avatar/Avatar.module.css`）：**
 
@@ -264,12 +268,14 @@ videoUrl / videoQueueState / avatarVideoError 及 setVideoUrl / setVideoQueueSta
 
 ## Section 9：生命周期与边界约束（强制）
 
-**约束 1 — stop() 时机与强制闭口。** `LipSyncController` 可以循环重播 viseme 序列，但必须在以下每个时机调用 `stop()`，且 `stop()` 必须强制 emit `closed`，避免语音结束后嘴还在动：
+**约束 1 — stop() 时机与强制闭口。** `LipSyncController` 可以循环重播 viseme 序列，但 `useAI` 必须在以下每个时机调用 `lipSyncController.stop()`，且 `stop()` 必须强制 emit `closed`，避免语音结束后嘴还在动：
 
 - `ttsProvider.speak()` 的 Promise **resolve** 时；
 - `ttsProvider.speak()` 的 Promise **reject** 时；
 - 新问题提交（`sendMessage` 开头）时；
-- `Avatar` 组件**卸载**（`useEffect` cleanup）时。
+- AI 调用失败（`sendMessage` catch 分支）时。
+
+**controller 生命周期归属：** `stop()` 由 `useAI`（renderer 根级 lifecycle）统一负责。`Avatar` 组件**不**调用 `controller.stop()`——Avatar 常驻，其 `useEffect` cleanup 仅作防御性处理（最多 `setCurrentViseme('closed')`），用于热重载/应用退出等极端情况。
 
 **约束 2 — 显示尺寸由 CSS 变量控制。** 256×128 仅为素材统一画布尺寸；overlay 在屏幕上的显示尺寸必须由 CSS 变量 `--mouth-w` 控制，逻辑层（TS/React）不得写死像素尺寸。
 
