@@ -1,5 +1,7 @@
 export type AvatarMood = 'idle' | 'thinking' | 'talking' | 'error'
 
+export type Viseme = 'closed' | 'a' | 'o' | 'e' | 'i' | 'u'
+
 export interface AvatarState {
   mood: AvatarMood
   isPushing: boolean

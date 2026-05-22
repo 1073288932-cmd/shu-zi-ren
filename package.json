@@ -13,6 +13,7 @@
   "dependencies": {
     "cos-nodejs-sdk-v5": "^2.15.4",
     "dotenv": "^17.4.2",
+    "pinyin-pro": "^3.28.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zustand": "^4.5.4"
