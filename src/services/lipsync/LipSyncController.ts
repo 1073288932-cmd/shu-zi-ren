@@ -16,6 +16,7 @@ export class LipSyncController {
     this.idx = 0
     if (this.sequence.length === 0) {
       onViseme('closed')
+      this.onViseme = null
       return
     }
     // 立即 emit 首帧，避免开口前有一帧空档

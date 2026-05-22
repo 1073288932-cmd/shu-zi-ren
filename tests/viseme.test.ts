@@ -35,4 +35,16 @@ describe('textToVisemes', () => {
   it('returns an empty array for empty string', () => {
     expect(textToVisemes('')).toEqual([])
   })
+
+  it('alternates e/i for consecutive ASCII consonants', () => {
+    expect(textToVisemes('bcdf')).toEqual(['e', 'i', 'e', 'i'])
+  })
+
+  it('inserts 2 closed frames for a newline', () => {
+    expect(textToVisemes('好\n好')).toEqual(['a', 'closed', 'closed', 'a'])
+  })
+
+  it('inserts 4 closed frames for an ellipsis', () => {
+    expect(textToVisemes('好…')).toEqual(['a', 'closed', 'closed', 'closed', 'closed'])
+  })
 })

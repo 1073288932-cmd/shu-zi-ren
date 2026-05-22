@@ -69,11 +69,12 @@ describe('LipSyncController', () => {
     ctrl.stop()
   })
 
-  it('emits closed for empty text', () => {
+  it('emits closed for empty text and does not re-emit on stop()', () => {
     const ctrl = new LipSyncController()
     const seen: Viseme[] = []
     ctrl.start('', v => seen.push(v))
     expect(seen).toEqual(['closed'])
     ctrl.stop()
+    expect(seen).toEqual(['closed'])  // 空文本 start 已清空 onViseme — stop 不再重复 emit
   })
 })
