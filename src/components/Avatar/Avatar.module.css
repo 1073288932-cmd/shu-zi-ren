@@ -16,11 +16,11 @@
   justify-content: center;
   animation: idle-float 3s ease-in-out infinite;
 
-  /* 嘴型 overlay 校准变量 —— 在最终验收时手动调到对齐角色嘴部。
-     --mouth-w 控制 overlay 屏幕显示尺寸（不得在 TS 里写死像素）。 */
-  --mouth-x: 50%;
-  --mouth-y: 62%;
-  --mouth-w: 22%;
+  /* 嘴型 overlay 校准变量（已对齐 839x1083 无嘴角色图的嘴部）。
+     --mouth-w 控制 overlay 屏幕显示尺寸；高度按 256:128 自动等比。 */
+  --mouth-x: 52.5%;
+  --mouth-y: 52.5%;
+  --mouth-w: 18%;
 }
 
 .characterImg {
