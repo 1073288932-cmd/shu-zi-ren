@@ -2,7 +2,7 @@ import { renderHook, act } from '@testing-library/react'
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useAI } from '../src/hooks/useAI'
 import { useAgentStore, initialState } from '../src/store/agentStore'
-import type { AIResponse } from '@shared/types'
+import type { AIResponse, Viseme } from '@shared/types'
 
 const mockChat = vi.hoisted(() => vi.fn())
 const mockSpeak = vi.hoisted(() => vi.fn())
@@ -34,6 +34,16 @@ describe('useAI', () => {
     mockSpeak.mockReturnValue(new Promise<void>(() => {}))
     vi.useFakeTimers()
     useAgentStore.setState(initialState)
+
+    // mock 必须模拟真实 LipSyncController contract，否则 currentViseme 断言无意义：
+    // start(text, cb) 立即用回调推一个非 closed viseme（真实是序列首帧）；
+    // stop() 强制把 viseme 推回 closed（spec Section 5）。
+    mockLipStart.mockImplementation((_text: string, cb: (v: Viseme) => void) => {
+      cb('a')
+    })
+    mockLipStop.mockImplementation(() => {
+      useAgentStore.getState().setCurrentViseme('closed')
+    })
   })
 
   afterEach(() => {
@@ -95,9 +105,12 @@ describe('useAI', () => {
     mockSpeak.mockReturnValue(new Promise<void>(r => { resolveSpeak = r }))
     const { result } = renderHook(() => useAI())
     await act(async () => { result.current.sendMessage('test'); await vi.runAllTicks() })
+    // 讲话中应是非 closed（mockLipStart 通过回调推了 'a'），断言才有变化的起点
     expect(useAgentStore.getState().mood).toBe('talking')
+    expect(useAgentStore.getState().currentViseme).toBe('a')
     await act(async () => { resolveSpeak(); await vi.runAllTicks() })
     expect(mockLipStop).toHaveBeenCalled()
+    expect(useAgentStore.getState().currentViseme).toBe('closed')
     expect(useAgentStore.getState().mood).toBe('idle')
     expect(useAgentStore.getState().isPushing).toBe(false)
   })
@@ -107,8 +120,10 @@ describe('useAI', () => {
     mockSpeak.mockReturnValue(new Promise<void>((_, rej) => { rejectSpeak = () => rej(new Error('tts fail')) }))
     const { result } = renderHook(() => useAI())
     await act(async () => { result.current.sendMessage('test'); await vi.runAllTicks() })
+    expect(useAgentStore.getState().currentViseme).toBe('a')
     await act(async () => { rejectSpeak(); await vi.runAllTicks() })
     expect(mockLipStop).toHaveBeenCalled()
+    expect(useAgentStore.getState().currentViseme).toBe('closed')
     expect(useAgentStore.getState().mood).toBe('idle')
   })
 
