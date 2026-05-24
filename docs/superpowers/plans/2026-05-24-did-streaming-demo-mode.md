@@ -16,29 +16,23 @@
 
 这一组**不是代码任务**，是执行前的人工准备。任何一项缺失，后续所有任务都会失败。
 
-### P-1：D-ID 账号 + API key
+### P-1：D-ID 账号 + API key ✅
 
-- [ ] 注册 D-ID Pro 档（含 Streaming Avatars 权限；入门 \$5.99 档不含 streaming）
-- [ ] 控制台拿到 API key
-- [ ] 绑定信用卡确认计费已开（**否则 createStream 会以 quota error 拒绝**）
+- [x] D-ID Trial 账号（已验证 Trial 档可跑 streaming，无需 Pro）
+- [x] 控制台拿到 API key，写入 main 根目录 `.env` 的 `DID_API_KEY=`
 
-### P-2：用 curl 验过 5 个核心 endpoint 通
+### P-2：用 curl 验过 5 个核心 endpoint 通 ✅（详 `D-ID-API-CHECK.md`）
 
-在本机用 curl 跑一遍下面 5 个调用，确认返回结构与 spec Section 2 的假设一致。**若任何字段名 / 路径不一致，先回 spec 修订**，不要直接进 Task 1。
+实测结论：
+- ✅ createStream / speak / endStream 通；submitAnswer 留 Task 7 联调
+- ❌ **stopSpeaking endpoint 不存在** —— spec 已改为 A 方案（renderer abort + 本地 video mute，不调网络）
+- ⚠️ session_id 必须用 `Cookie:` header（不是 body 字段）
+- ⚠️ 字段名 snake_case（`ice_servers` / `session_id`），service 内转 camelCase
+- ⚠️ speak `script.input` 最少 3 字符，service 层入参校验
+- ⚠️ endStream 不带 body
+- ⚠️ createStream 实测耗时 ~9 秒，整段 connecting 状态预计 9-12s
 
-```bash
-# 1. createStream（替换 <KEY> 与 <SOURCE_URL>）
-curl -X POST https://api.d-id.com/talks/streams \
-  -H "Authorization: Basic <KEY>" \
-  -H "Content-Type: application/json" \
-  -d '{"source_url":"<D-ID 预置 avatar URL>"}'
-# 期望返回：{id, offer, ice_servers, session_id}
-
-# 2-5. submitAnswer / speak / stopSpeaking / endStream
-# 按 D-ID 最新官方文档跑通，记下实际 endpoint 与 body 字段
-```
-
-预期产物：一份 `D-ID-API-CHECK.md`（不入库，自己留底），列出每个 endpoint 的实际 URL、实际请求体、实际返回。Task 4 实现时严格参照这份记录。
+**Task 4 / 5 / 7 / 8 / 10 的实现必须严格按 `D-ID-API-CHECK.md` + 修订后的 spec Section 2-4 走，不可凭旧记忆。**
 
 ### P-3：worktree 创建
 
@@ -71,19 +65,19 @@ DID_VOICE_ID=zh-CN-XiaoxiaoNeural
 | 文件 | 职责 |
 |---|---|
 | `shared/types.ts`（**修改**） | 追加 `RenderMode` / `CloudConnectionState` / `DIDErrorCode` / `DIDError` / `DIDStreamInit` / `DIDConfigStatus` |
-| `electron/services/DIDStreamingService.ts` | main 进程 REST 封装，6 个方法（`getConfigStatus` / `createStream` / `submitAnswer` / `speak` / `stopSpeaking` / `endStream`），持有 API key |
-| `electron/services/didStreamingHandler.ts` | 6 个 IPC handler 注册函数；sender 校验；错误映射 |
+| `electron/services/DIDStreamingService.ts` | main 进程 REST 封装，**5 个方法**（`getConfigStatus` / `createStream` / `submitAnswer` / `speak` / `endStream`，**无 stopSpeaking**），持有 API key；session 走 Cookie header；createStream 内做 snake→camel 转换；speak 入口校验 text.length >= 3 |
+| `electron/services/didStreamingHandler.ts` | **5 个** IPC handler 注册函数；sender 校验；错误映射 |
 | `electron/main.ts`（**修改**） | 调用 didStreamingHandler 的 register 函数；`before-quit` 时无 session 持有的场景，主进程无需 cleanup（renderer 端的 sessionManager 已在退出前关 session） |
-| `electron/preload.ts`（**修改**） | 在 `window.electronAPI` 平铺追加 6 个 `did*` 方法 |
-| `src/types/electron.d.ts`（**修改**） | 在 `electronAPI` interface 上追加 6 个方法类型 |
-| `src/services/did/DIDStreamClient.ts` | renderer 侧单次 session 的 WebRTC 封装；`open` / `speak(text, signal)` / `stopSpeaking` / `close` / `getMediaStream` / `uptimeMinutes` / `isOpen`；构造器接受 `peerFactory` 便于测试 |
-| `src/services/did/sessionManager.ts` | 单例；`ensureConnected` / `speak`（abort 包装） / `interruptCurrentSpeak` / `notifyIdle` / `closeNow` / `getCurrentStream`；S2 idle timeout |
+| `electron/preload.ts`（**修改**） | 在 `window.electronAPI` 平铺追加 **5 个** `did*` 方法 |
+| `src/types/electron.d.ts`（**修改**） | 在 `electronAPI` interface 上追加 **5 个**方法类型 |
+| `src/services/did/DIDStreamClient.ts` | renderer 侧单次 session 的 WebRTC 封装；`open` / `speak(text, signal)` / `close` / `getMediaStream` / `uptimeMinutes` / `isOpen`；**无 stopSpeaking 方法**（D-ID 无此 endpoint）；构造器接受 `peerFactory` 便于测试 |
+| `src/services/did/sessionManager.ts` | 单例；`ensureConnected` / `speak`（abort 包装 + 起始 setCloudMuted(false)）/ `interruptCurrentSpeak`（**同步**，abort + setCloudMuted(true)，**不调网络**）/ `notifyIdle` / `closeNow`（含 setCloudMuted(false)）/ `getCurrentStream`；S2 idle timeout |
 | `src/services/did/index.ts` | **仅**导出 `sessionManager` 单例和 `DIDStreamClient` 类型；**不导出** `didStreamClient` 单例 |
-| `src/store/agentStore.ts`（**修改**） | 新增 `renderMode` / `cloudConn` / `cloudLastError` / `cloudMinutesThisMonth` 字段；新增 4 个 setter；`setRenderMode('local')` 必须同时把 `currentViseme` 重置为 `'closed'`；`reset()` 复位所有新字段 |
+| `src/store/agentStore.ts`（**修改**） | 新增 `renderMode` / `cloudConn` / **`cloudMuted`** / `cloudLastError` / `cloudMinutesThisMonth` 字段；新增 **5 个** setter；`setRenderMode('local')` 必须同时把 `currentViseme` 重置为 `'closed'` **且 `cloudMuted` 重置为 `false`**；`reset()` 复位所有新字段 |
 | `src/hooks/useCloudCostTracker.ts` | `useCloudCostTracker()` 返回当月分钟数；`addCloudMinutes(n)` 累加并写 localStorage（跨月自动清零） |
 | `src/hooks/useAI.ts`（**修改**） | 在原 sendMessage 头部加 cloud 模式打断；按 `renderMode` 分支调用 lipsync 或 sessionManager；fallback 函数 `handleCloudFailure` |
 | `src/components/Avatar/LocalAvatar.tsx` | 现 `src/components/Avatar/index.tsx` 内容整段搬来，0 行为变动 |
-| `src/components/Avatar/CloudAvatar.tsx` | `<video>` + WebRTC stream 绑定（来源仅 `sessionManager.getCurrentStream()`）+ connecting / error overlay |
+| `src/components/Avatar/CloudAvatar.tsx` | `<video>` + WebRTC stream 绑定（来源仅 `sessionManager.getCurrentStream()`）+ **订阅 cloudMuted 驱动 video.muted** + connecting / error overlay |
 | `src/components/Avatar/CloudAvatar.module.css` | video 容器 + overlay 样式 |
 | `src/components/Avatar/index.tsx`（**重写**） | 5 行 RouterAvatar：按 `renderMode` 选 Local 或 Cloud |
 | `src/components/ModeToggle/index.tsx` | toggle 按钮 + confirm modal + toast；mount 时调 `didGetConfigStatus` |
@@ -185,19 +179,28 @@ describe('D-ID demo-mode state', () => {
     useAgentStore.setState(initialState)
   })
 
-  it('initial state has renderMode=local, cloudConn=idle, cloudMinutes=0, cloudLastError=null', () => {
+  it('initial state has renderMode=local, cloudConn=idle, cloudMuted=false, cloudMinutes=0, cloudLastError=null', () => {
     const s = useAgentStore.getState()
     expect(s.renderMode).toBe('local')
     expect(s.cloudConn).toBe('idle')
+    expect(s.cloudMuted).toBe(false)
     expect(s.cloudMinutesThisMonth).toBe(0)
     expect(s.cloudLastError).toBeNull()
   })
 
-  it('setRenderMode("local") also resets currentViseme to "closed"', () => {
-    useAgentStore.setState({ renderMode: 'cloud', currentViseme: 'a' })
+  it('setRenderMode("local") resets currentViseme to "closed" AND cloudMuted to false', () => {
+    useAgentStore.setState({ renderMode: 'cloud', currentViseme: 'a', cloudMuted: true })
     useAgentStore.getState().setRenderMode('local')
     expect(useAgentStore.getState().renderMode).toBe('local')
     expect(useAgentStore.getState().currentViseme).toBe('closed')  // 关键不变量（spec Section 1）
+    expect(useAgentStore.getState().cloudMuted).toBe(false)         // 同 spec Section 1
+  })
+
+  it('setCloudMuted updates cloudMuted', () => {
+    useAgentStore.getState().setCloudMuted(true)
+    expect(useAgentStore.getState().cloudMuted).toBe(true)
+    useAgentStore.getState().setCloudMuted(false)
+    expect(useAgentStore.getState().cloudMuted).toBe(false)
   })
 
   it('setRenderMode("cloud") does NOT touch currentViseme', () => {
@@ -228,6 +231,7 @@ describe('D-ID demo-mode state', () => {
     useAgentStore.setState({
       renderMode: 'cloud',
       cloudConn: 'streaming',
+      cloudMuted: true,
       cloudLastError: 'oops',
       cloudMinutesThisMonth: 99,
     })
@@ -235,6 +239,7 @@ describe('D-ID demo-mode state', () => {
     const s = useAgentStore.getState()
     expect(s.renderMode).toBe('local')
     expect(s.cloudConn).toBe('idle')
+    expect(s.cloudMuted).toBe(false)
     expect(s.cloudLastError).toBeNull()
     expect(s.cloudMinutesThisMonth).toBe(0)
   })
@@ -274,6 +279,7 @@ interface AgentStoreState {
   // D-ID demo-mode
   renderMode: RenderMode
   cloudConn: CloudConnectionState
+  cloudMuted: boolean
   cloudLastError: string | null
   cloudMinutesThisMonth: number
 
@@ -291,6 +297,7 @@ interface AgentStoreState {
   // D-ID demo-mode
   setRenderMode: (mode: RenderMode) => void
   setCloudConn: (state: CloudConnectionState) => void
+  setCloudMuted: (muted: boolean) => void
   setCloudError: (msg: string | null) => void
   addCloudMinutes: (minutes: number) => void
   reset: () => void
@@ -309,6 +316,7 @@ export const initialState = {
   currentViseme: 'closed' as Viseme,
   renderMode: 'local' as RenderMode,
   cloudConn: 'idle' as CloudConnectionState,
+  cloudMuted: false,
   cloudLastError: null as string | null,
   cloudMinutesThisMonth: 0,
 }
@@ -329,11 +337,12 @@ export const useAgentStore = create<AgentStoreState>()(set => ({
   setSelectedResourceId: selectedResourceId => set({ selectedResourceId }),
   setCurrentViseme: currentViseme => set({ currentViseme }),
 
-  // setRenderMode('local') 必须同步重置 currentViseme（spec Section 1 强制不变量）
+  // setRenderMode('local') 必须同步重置 currentViseme 与 cloudMuted（spec Section 1 强制不变量）
   setRenderMode: mode => set(mode === 'local'
-    ? { renderMode: 'local', currentViseme: 'closed' as Viseme }
+    ? { renderMode: 'local', currentViseme: 'closed' as Viseme, cloudMuted: false }
     : { renderMode: 'cloud' }),
   setCloudConn: cloudConn => set({ cloudConn }),
+  setCloudMuted: cloudMuted => set({ cloudMuted }),
   setCloudError: cloudLastError => set({ cloudLastError }),
   addCloudMinutes: minutes => set(state => ({
     cloudMinutesThisMonth: state.cloudMinutesThisMonth + minutes,
@@ -354,7 +363,7 @@ Expected: 所有用例 PASS。
 
 ```bash
 git add src/store/agentStore.ts tests/agentStore.test.ts
-git commit -m "feat(store): add renderMode/cloudConn/cloudMinutes/cloudLastError + setRenderMode resets viseme"
+git commit -m "feat(store): add renderMode/cloudConn/cloudMuted/cloudMinutes/cloudLastError; setRenderMode resets viseme+mute"
 ```
 
 ---
@@ -515,7 +524,7 @@ git commit -m "feat(hooks): add useCloudCostTracker (localStorage monthly minute
 - Create: `electron/services/DIDStreamingService.ts`
 - Create: `tests/DIDStreamingService.test.ts`
 
-> ⚠️ **实现前先读 P-2 阶段记录的 `D-ID-API-CHECK.md`**。下方代码里的 endpoint URL、字段名都是**按 spec 假设**写的，若与真实 API 不一致，按真实 API 调整。
+> ✅ **P-2 已验证完毕**（详 `D-ID-API-CHECK.md`）。下方代码已按真实 API 写好：5 个方法（无 stopSpeaking）、session 走 Cookie header、snake→camel 字段映射、speak 入参 minLength 3 校验。**严格照此实现，不要凭旧记忆改回 spec 假设。**
 
 - [ ] **Step 1：先写失败测试**
 
@@ -549,9 +558,14 @@ describe('DIDStreamingService', () => {
   })
 
   describe('createStream', () => {
-    it('POSTs source_url to /talks/streams with Bearer auth', async () => {
+    it('POSTs source_url to /talks/streams with Basic auth, converts snake_case response to camelCase', async () => {
       const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(
-        JSON.stringify({ id: 'sid', offer: { type: 'offer', sdp: 'v=0' }, ice_servers: [], session_id: 'session1' }),
+        JSON.stringify({
+          id: 'strm_sid',
+          offer: { type: 'offer', sdp: 'v=0' },
+          ice_servers: [{ urls: ['stun:test'], username: 'u', credential: 'c' }],
+          session_id: 'AWSALB=cookie1;AWSALBCORS=cookie2',
+        }),
         { status: 201 }
       ))
       const svc = new DIDStreamingService(FAKE_KEY, FAKE_SOURCE)
@@ -562,11 +576,12 @@ describe('DIDStreamingService', () => {
       expect(init.method).toBe('POST')
       expect((init.headers as Record<string, string>).Authorization).toBe(`Basic ${FAKE_KEY}`)
       expect(JSON.parse(init.body as string)).toEqual({ source_url: FAKE_SOURCE })
+      // 关键：snake → camel
       expect(result).toEqual({
-        id: 'sid',
+        id: 'strm_sid',
         offer: { type: 'offer', sdp: 'v=0' },
-        iceServers: [],
-        sessionId: 'session1',
+        iceServers: [{ urls: ['stun:test'], username: 'u', credential: 'c' }],
+        sessionId: 'AWSALB=cookie1;AWSALBCORS=cookie2',
       })
     })
 
@@ -600,51 +615,59 @@ describe('DIDStreamingService', () => {
     })
   })
 
-  describe('submitAnswer / speak / stopSpeaking / endStream — request shape', () => {
+  describe('submitAnswer / speak / endStream — Cookie header for session, P-2 verified shapes', () => {
+    const FAKE_SESSION = 'AWSALB=v1;AWSALBCORS=v2'
+
     beforeEach(() => {
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 200 }))
     })
 
-    it('submitAnswer POSTs to /talks/streams/{id}/sdp with answer + sessionId', async () => {
+    it('submitAnswer POSTs to /talks/streams/{id}/sdp with Cookie header (NOT body session_id)', async () => {
       const svc = new DIDStreamingService(FAKE_KEY, FAKE_SOURCE)
       const answer: RTCSessionDescriptionInit = { type: 'answer', sdp: 'v=0' }
-      await svc.submitAnswer('sid', 'session1', answer)
+      await svc.submitAnswer('strm_sid', FAKE_SESSION, answer)
       const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('https://api.d-id.com/talks/streams/sid/sdp')
-      expect(JSON.parse(init.body as string)).toEqual({ answer, session_id: 'session1' })
+      expect(url).toBe('https://api.d-id.com/talks/streams/strm_sid/sdp')
+      expect((init.headers as Record<string, string>).Cookie).toBe(FAKE_SESSION)
+      const body = JSON.parse(init.body as string)
+      expect(body).toEqual({ answer })           // 关键：body 无 session_id
+      expect('session_id' in body).toBe(false)
     })
 
-    it('speak POSTs script payload with voice id', async () => {
+    it('speak POSTs script payload with voice id + Cookie header (NOT body session_id)', async () => {
       const svc = new DIDStreamingService(FAKE_KEY, FAKE_SOURCE, 'zh-CN-XiaoxiaoNeural')
-      await svc.speak('sid', 'session1', '你好')
+      await svc.speak('strm_sid', FAKE_SESSION, '你好世界')
       const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('https://api.d-id.com/talks/streams/sid')
+      expect(url).toBe('https://api.d-id.com/talks/streams/strm_sid')
+      expect((init.headers as Record<string, string>).Cookie).toBe(FAKE_SESSION)
       const body = JSON.parse(init.body as string)
-      expect(body.session_id).toBe('session1')
       expect(body.script).toMatchObject({
         type: 'text',
-        input: '你好',
+        input: '你好世界',
         provider: { type: 'microsoft', voice_id: 'zh-CN-XiaoxiaoNeural' },
       })
+      expect('session_id' in body).toBe(false)
     })
 
-    it('stopSpeaking DELETEs /talks/streams/{id}/speak (or falls back)', async () => {
+    it('speak with text.length < 3 throws DID_API without calling fetch', async () => {
+      const fetchSpy = (globalThis.fetch as ReturnType<typeof vi.fn>)
+      fetchSpy.mockClear()
       const svc = new DIDStreamingService(FAKE_KEY, FAKE_SOURCE)
-      await svc.stopSpeaking('sid', 'session1')
-      const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit]
-      // 若实际 API 用别的方式，按 P-2 校准结果调
-      expect(url).toMatch(/\/talks\/streams\/sid/)
-      expect(init.method === 'DELETE' || init.method === 'POST').toBe(true)
+      await expect(svc.speak('strm_sid', FAKE_SESSION, '你好')).rejects.toMatchObject({ code: 'DID_API' })
+      expect(fetchSpy).not.toHaveBeenCalled()
     })
 
-    it('endStream DELETEs /talks/streams/{id}', async () => {
+    it('endStream DELETEs /talks/streams/{id} with Cookie header and NO body', async () => {
       const svc = new DIDStreamingService(FAKE_KEY, FAKE_SOURCE)
-      await svc.endStream('sid', 'session1')
+      await svc.endStream('strm_sid', FAKE_SESSION)
       const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit]
-      expect(url).toBe('https://api.d-id.com/talks/streams/sid')
+      expect(url).toBe('https://api.d-id.com/talks/streams/strm_sid')
       expect(init.method).toBe('DELETE')
-      expect(JSON.parse(init.body as string)).toEqual({ session_id: 'session1' })
+      expect((init.headers as Record<string, string>).Cookie).toBe(FAKE_SESSION)
+      expect(init.body).toBeUndefined()
     })
+
+    // 注意：没有 stopSpeaking 测试。D-ID 无该 endpoint，DIDStreamingService 也无该方法。
   })
 })
 ```
@@ -683,6 +706,8 @@ async function safeFetch(url: string, init: RequestInit): Promise<Response> {
   }
 }
 
+const MIN_SPEAK_LEN = 3  // D-ID spec: script.input minLength=3（P-2 实测）
+
 export class DIDStreamingService {
   constructor(
     private readonly apiKey: string,
@@ -701,28 +726,40 @@ export class DIDStreamingService {
     return { configured: true }
   }
 
-  private headers(): Record<string, string> {
-    // D-ID uses Basic auth scheme with API key directly (no colon needed per docs).
-    // If P-2 curl test shows Bearer instead, swap here.
+  // 仅 createStream 用——不带 Cookie（首次调用还没有 session_id）
+  private headersNoCookie(): Record<string, string> {
     return {
       Authorization: `Basic ${this.apiKey}`,
       'Content-Type': 'application/json',
     }
   }
 
+  // session 内方法用——sessionId 走 Cookie header（P-2 实测：D-ID 服务端要求）
+  private headersWithCookie(sessionId: string): Record<string, string> {
+    return {
+      Authorization: `Basic ${this.apiKey}`,
+      'Content-Type': 'application/json',
+      Cookie: sessionId,
+    }
+  }
+
   async createStream(): Promise<DIDStreamInit> {
     const res = await safeFetch(`${BASE}/talks/streams`, {
       method: 'POST',
-      headers: this.headers(),
+      headers: this.headersNoCookie(),
       body: JSON.stringify({ source_url: this.sourceUrl }),
     })
     if (!res.ok) throw didErr(mapStatus(res.status), `createStream HTTP ${res.status}`)
+    // ⚠️ Response body 含 \r\n（SDP），需用 strict=false 等价语义。fetch().json() 默认严格，
+    // 这里假设 D-ID 实际返回是合法 JSON（双引号字符串内的 \r\n 是合法 escape）。如解析失败，
+    // 改用 `res.text()` 后手动 `JSON.parse(text)`（V8 解析器对 control chars 更宽容）。
     const json = await res.json() as {
       id: string
       offer: RTCSessionDescriptionInit
       ice_servers: RTCIceServer[]
       session_id: string
     }
+    // snake → camel（P-2 实测：D-ID 返回是 snake_case）
     return {
       id: json.id,
       offer: json.offer,
@@ -734,54 +771,48 @@ export class DIDStreamingService {
   async submitAnswer(streamId: string, sessionId: string, answer: RTCSessionDescriptionInit): Promise<void> {
     const res = await safeFetch(`${BASE}/talks/streams/${streamId}/sdp`, {
       method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify({ answer, session_id: sessionId }),
+      headers: this.headersWithCookie(sessionId),
+      body: JSON.stringify({ answer }),  // 关键：无 session_id 字段
     })
     if (!res.ok) throw didErr(mapStatus(res.status), `submitAnswer HTTP ${res.status}`)
   }
 
   async speak(streamId: string, sessionId: string, text: string): Promise<void> {
+    // P-2 实测：D-ID 要求 script.input.length >= 3，否则 400 ValidationError
+    // 在 service 层先拦截，给上层更明确的错误
+    if (text.length < MIN_SPEAK_LEN) {
+      throw didErr('DID_API', `speak text too short (${text.length} chars; min ${MIN_SPEAK_LEN})`)
+    }
     const res = await safeFetch(`${BASE}/talks/streams/${streamId}`, {
       method: 'POST',
-      headers: this.headers(),
+      headers: this.headersWithCookie(sessionId),
       body: JSON.stringify({
         script: {
           type: 'text',
           input: text,
           provider: { type: 'microsoft', voice_id: this.voiceId },
         },
-        session_id: sessionId,
+        // 关键：无 session_id 字段
       }),
     })
     if (!res.ok) throw didErr(mapStatus(res.status), `speak HTTP ${res.status}`)
   }
 
-  async stopSpeaking(streamId: string, sessionId: string): Promise<void> {
-    // D-ID 若无显式 stop-speak endpoint，按 P-2 调研结果调整：
-    // 方案 A：DELETE /talks/streams/{id}/speak
-    // 方案 B：POST /talks/streams/{id} with empty script (overwrite)
-    // 方案 C：直接 endStream + ensureConnected 重开（最慢、最稳）
-    const res = await safeFetch(`${BASE}/talks/streams/${streamId}/speak`, {
-      method: 'DELETE',
-      headers: this.headers(),
-      body: JSON.stringify({ session_id: sessionId }),
-    })
-    if (!res.ok && res.status !== 404) {
-      // 404 通常意味着"已经停了"或"没有正在播的"——不当错误
-      throw didErr(mapStatus(res.status), `stopSpeaking HTTP ${res.status}`)
-    }
-  }
-
   async endStream(streamId: string, sessionId: string): Promise<void> {
+    // P-2 实测：endStream 不带 body，session 走 Cookie
     const res = await safeFetch(`${BASE}/talks/streams/${streamId}`, {
       method: 'DELETE',
-      headers: this.headers(),
-      body: JSON.stringify({ session_id: sessionId }),
+      headers: this.headersWithCookie(sessionId),
+      // 关键：无 body
     })
     if (!res.ok && res.status !== 404) {
       throw didErr(mapStatus(res.status), `endStream HTTP ${res.status}`)
     }
   }
+
+  // 注意：**没有 stopSpeaking 方法**。
+  // D-ID Streaming API 无 server-side stopSpeaking endpoint（P-2 实测 403 from CloudFront）。
+  // 打断旧 speak 通过 sessionManager.interruptCurrentSpeak() 在 renderer 端实现（AbortController + 本地 mute）。
 }
 ```
 
@@ -797,7 +828,7 @@ Expected: 所有用例 PASS。
 
 ```bash
 git add electron/services/DIDStreamingService.ts tests/DIDStreamingService.test.ts
-git commit -m "feat(electron): add DIDStreamingService (REST wrapper, 6 endpoints)"
+git commit -m "feat(electron): add DIDStreamingService (REST wrapper, 5 endpoints; Cookie session per P-2)"
 ```
 
 ---
@@ -882,13 +913,12 @@ describe('didStreamingHandler', () => {
     })
   })
 
-  describe('input validation (submitAnswer / speak / stopSpeaking / endStream)', () => {
+  describe('input validation (submitAnswer / speak / endStream)', () => {
     let svc: DIDStreamingService
     beforeEach(() => {
       svc = makeSvc({
         submitAnswer: vi.fn().mockResolvedValue(undefined),
         speak: vi.fn().mockResolvedValue(undefined),
-        stopSpeaking: vi.fn().mockResolvedValue(undefined),
         endStream: vi.fn().mockResolvedValue(undefined),
       } as Partial<DIDStreamingService>)
     })
@@ -910,6 +940,9 @@ describe('didStreamingHandler', () => {
       const result = await handlers.speak(true, 'sid', 'session1', 'a'.repeat(1001))
       expect(result).toMatchObject({ code: 'DID_API' })
     })
+
+    // 注意：handler 不再校验 text 下限 —— service 层做 minLength 3 校验（更近 D-ID 真实约束）
+    // 注意：没有 stopSpeaking handler 测试 —— 该方法被删除
   })
 })
 ```
@@ -997,21 +1030,6 @@ export function createDidHandlers(serviceFactory: () => DIDStreamingService) {
     }
   }
 
-  async function stopSpeaking(
-    validSender: boolean,
-    streamId: string, sessionId: string,
-  ): Promise<AppError | undefined> {
-    if (!validSender) return INVALID_SENDER
-    if (typeof streamId !== 'string' || typeof sessionId !== 'string') return INVALID_INPUT
-    const svc = serviceFactory()
-    try {
-      await svc.stopSpeaking(streamId, sessionId)
-      return undefined
-    } catch (e) {
-      return toError(e, (svc as unknown as { apiKey: string }).apiKey ?? '')
-    }
-  }
-
   async function endStream(
     validSender: boolean,
     streamId: string, sessionId: string,
@@ -1027,7 +1045,8 @@ export function createDidHandlers(serviceFactory: () => DIDStreamingService) {
     }
   }
 
-  return { getConfigStatus, createStream, submitAnswer, speak, stopSpeaking, endStream }
+  // 注意：无 stopSpeaking handler。D-ID 无对应 endpoint；打断由 renderer sessionManager 处理。
+  return { getConfigStatus, createStream, submitAnswer, speak, endStream }
 }
 
 export type DidHandlers = ReturnType<typeof createDidHandlers>
@@ -1072,7 +1091,7 @@ DID_AVATAR_SOURCE_URL=
 DID_VOICE_ID=zh-CN-XiaoxiaoNeural
 ```
 
-- [ ] **Step 2：在 `electron/main.ts` 注册 6 个 IPC channel**
+- [ ] **Step 2：在 `electron/main.ts` 注册 5 个 IPC channel**（无 stop-speaking）
 
 找到 `import` 块，追加：
 
@@ -1119,22 +1138,17 @@ ipcMain.handle('did-speak', (event, streamId: unknown, sessionId: unknown, text:
   ),
 )
 
-ipcMain.handle('did-stop-speaking', (event, streamId: unknown, sessionId: unknown) =>
-  didHandlers.stopSpeaking(
-    BrowserWindow.fromWebContents(event.sender) !== null,
-    streamId as string, sessionId as string,
-  ),
-)
-
 ipcMain.handle('did-end-stream', (event, streamId: unknown, sessionId: unknown) =>
   didHandlers.endStream(
     BrowserWindow.fromWebContents(event.sender) !== null,
     streamId as string, sessionId as string,
   ),
 )
+
+// 注意：无 did-stop-speaking 注册（D-ID 无对应 endpoint；renderer 端 abort+mute 实现打断）
 ```
 
-- [ ] **Step 3：在 `electron/preload.ts` 平铺暴露 6 个方法**
+- [ ] **Step 3：在 `electron/preload.ts` 平铺暴露 5 个方法**
 
 在现有 `contextBridge.exposeInMainWorld('electronAPI', { ... })` 对象内（紧跟在 `transcribeAudio` 之**后**），追加：
 
@@ -1155,13 +1169,11 @@ ipcMain.handle('did-end-stream', (event, streamId: unknown, sessionId: unknown) 
     return ipcRenderer.invoke('did-speak', streamId, sessionId, text)
   },
 
-  didStopSpeaking(streamId: string, sessionId: string): Promise<AppError | undefined> {
-    return ipcRenderer.invoke('did-stop-speaking', streamId, sessionId)
-  },
-
   didEndStream(streamId: string, sessionId: string): Promise<AppError | undefined> {
     return ipcRenderer.invoke('did-end-stream', streamId, sessionId)
   },
+
+  // 注意：无 didStopSpeaking —— D-ID 无对应 endpoint
 ```
 
 - [ ] **Step 4：在 `src/types/electron.d.ts` 追加类型**
@@ -1187,12 +1199,11 @@ declare global {
       chat(messages: AgentMessage[]): Promise<AIResponse | AppError>
       setApiKey(key: string): Promise<AppError | undefined>
       transcribeAudio(buffer: ArrayBuffer): Promise<AppError | string>
-      // D-ID Streaming Demo-Mode
+      // D-ID Streaming Demo-Mode（5 个方法，无 didStopSpeaking）
       didGetConfigStatus(): Promise<DIDConfigStatus>
       didCreateStream(): Promise<DIDStreamInit | AppError>
       didSubmitAnswer(streamId: string, sessionId: string, answer: RTCSessionDescriptionInit): Promise<AppError | undefined>
       didSpeak(streamId: string, sessionId: string, text: string): Promise<AppError | undefined>
-      didStopSpeaking(streamId: string, sessionId: string): Promise<AppError | undefined>
       didEndStream(streamId: string, sessionId: string): Promise<AppError | undefined>
     }
   }
@@ -1213,7 +1224,7 @@ Expected: tsc 干净；所有现有测试 + 新加的 service/handler 测试全�
 
 ```bash
 git add electron/main.ts electron/preload.ts src/types/electron.d.ts .env.example
-git commit -m "feat(electron): wire 6 D-ID IPC handlers; flat-extend electronAPI on preload"
+git commit -m "feat(electron): wire 5 D-ID IPC handlers; flat-extend electronAPI on preload"
 ```
 
 ---
@@ -1234,12 +1245,11 @@ git commit -m "feat(electron): wire 6 D-ID IPC handlers; flat-extend electronAPI
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { DIDStreamClient } from '../src/services/did/DIDStreamClient'
 
-// ----- Mock electronAPI -----
+// ----- Mock electronAPI（5 个方法，无 didStopSpeaking） -----
 const mockApi = {
   didCreateStream: vi.fn(),
   didSubmitAnswer: vi.fn(),
   didSpeak: vi.fn(),
-  didStopSpeaking: vi.fn(),
   didEndStream: vi.fn(),
 }
 
@@ -1526,11 +1536,9 @@ export class DIDStreamClient {
     if (result && (result as AppError).code) throw result as AppError
   }
 
-  async stopSpeaking(): Promise<void> {
-    if (!this.opened || !this.streamId || !this.sessionId) return
-    const err = await window.electronAPI.didStopSpeaking(this.streamId, this.sessionId)
-    if (err) throw err
-  }
+  // 注意：**无 stopSpeaking 方法**。
+  // D-ID Streaming API 无 server-side stopSpeaking endpoint（P-2 实测 403 from CloudFront）。
+  // sessionManager.interruptCurrentSpeak() 通过 AbortController + setCloudMuted(true) 实现"软停"。
 
   async close(): Promise<void> {
     if (this.streamId && this.sessionId) {
@@ -1558,7 +1566,7 @@ Expected: 全部 PASS。**若某个测试因 happy-dom 缺 `RTCPeerConnection` �
 
 ```bash
 git add src/services/did/DIDStreamClient.ts tests/DIDStreamClient.test.ts
-git commit -m "feat(did): add DIDStreamClient (WebRTC session wrapper with PeerFactory injection)"
+git commit -m "feat(did): add DIDStreamClient (WebRTC session wrapper; no stopSpeaking — D-ID lacks endpoint)"
 ```
 
 ---
@@ -1579,10 +1587,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { SessionManager, IDLE_TIMEOUT_MS } from '../src/services/did/sessionManager'
 import { useAgentStore, initialState } from '../src/store/agentStore'
 
-// Mock DIDStreamClient as a value module so we control the class behavior
+// Mock DIDStreamClient（无 stopSpeaking 方法）
 const mockOpen = vi.hoisted(() => vi.fn())
 const mockSpeak = vi.hoisted(() => vi.fn())
-const mockStopSpeaking = vi.hoisted(() => vi.fn())
 const mockClose = vi.hoisted(() => vi.fn())
 const mockGetStream = vi.hoisted(() => vi.fn())
 const mockIsOpen = vi.hoisted(() => vi.fn())
@@ -1592,7 +1599,6 @@ vi.mock('../src/services/did/DIDStreamClient', () => ({
   DIDStreamClient: vi.fn().mockImplementation(() => ({
     open: mockOpen,
     speak: mockSpeak,
-    stopSpeaking: mockStopSpeaking,
     close: mockClose,
     getMediaStream: mockGetStream,
     isOpen: mockIsOpen,
@@ -1609,7 +1615,6 @@ describe('SessionManager', () => {
     useAgentStore.setState(initialState)
     mockOpen.mockResolvedValue(undefined)
     mockSpeak.mockResolvedValue(undefined)
-    mockStopSpeaking.mockResolvedValue(undefined)
     mockClose.mockResolvedValue(undefined)
     mockGetStream.mockReturnValue({ id: 'fake' } as unknown as MediaStream)
     mockIsOpen.mockReturnValue(true)
@@ -1652,12 +1657,19 @@ describe('SessionManager', () => {
       expect(mockSpeak).toHaveBeenCalledWith('hello', expect.any(AbortSignal))
     })
 
-    it('resolves "interrupted" when interruptCurrentSpeak is called mid-flight', async () => {
+    it('speak() start unsets cloudMuted (解除上一轮 interrupt 留下的静音)', async () => {
+      useAgentStore.setState({ cloudMuted: true })  // 模拟上轮被打断后的状态
+      await mgr.ensureConnected()
+      const speakPromise = mgr.speak('hello')
+      // speak 已开始执行，cloudMuted 应立刻被清成 false（同步动作）
+      expect(useAgentStore.getState().cloudMuted).toBe(false)
+      await speakPromise
+    })
+
+    it('resolves "interrupted" when interruptCurrentSpeak is called mid-flight; sets cloudMuted=true', async () => {
       await mgr.ensureConnected()
       // make speak hang
-      let pendingResolve: () => void = () => {}
-      mockSpeak.mockImplementation((_text: string, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
-        pendingResolve = resolve
+      mockSpeak.mockImplementation((_text: string, signal: AbortSignal) => new Promise<void>((_resolve, reject) => {
         signal.addEventListener('abort', () => {
           const err = new Error('aborted')
           err.name = 'AbortError'
@@ -1665,11 +1677,17 @@ describe('SessionManager', () => {
         })
       }))
       const speakPromise = mgr.speak('hi')
-      await mgr.interruptCurrentSpeak()
+      mgr.interruptCurrentSpeak()  // 同步调用，不 await
       const result = await speakPromise
       expect(result).toBe('interrupted')
-      expect(mockStopSpeaking).toHaveBeenCalled()
-      void pendingResolve
+      expect(useAgentStore.getState().cloudMuted).toBe(true)
+      // 关键：interruptCurrentSpeak 不调任何 client 网络方法（D-ID 无对应 endpoint）
+    })
+
+    it('interruptCurrentSpeak is synchronous (no network call)', () => {
+      // 仅类型检查：函数返回 void，不是 Promise
+      const result: void = mgr.interruptCurrentSpeak()
+      expect(result).toBeUndefined()
     })
   })
 
@@ -1697,11 +1715,13 @@ describe('SessionManager', () => {
   })
 
   describe('closeNow', () => {
-    it('accumulates uptime minutes into store', async () => {
+    it('accumulates uptime minutes + resets cloudMuted into store', async () => {
       mockUptime.mockReturnValue(3.7)
+      useAgentStore.setState({ cloudMuted: true })  // 模拟之前被打断的状态
       await mgr.ensureConnected()
       await mgr.closeNow()
       expect(useAgentStore.getState().cloudMinutesThisMonth).toBeCloseTo(3.7)
+      expect(useAgentStore.getState().cloudMuted).toBe(false)
       expect(mockClose).toHaveBeenCalled()
     })
 
@@ -1763,6 +1783,8 @@ export class SessionManager {
     if (!this.client) throw new Error('no active client; call ensureConnected first')
     this.currentSpeakAbort = new AbortController()
     const signal = this.currentSpeakAbort.signal
+    // 起始 unmute（解除上一轮 interrupt 留下的静音状态）
+    useAgentStore.getState().setCloudMuted(false)
     try {
       await this.client.speak(text, signal)
       return signal.aborted ? 'interrupted' : 'completed'
@@ -1779,14 +1801,15 @@ export class SessionManager {
     this.idleTimer = setTimeout(() => { void this.closeNow() }, IDLE_TIMEOUT_MS)
   }
 
-  async interruptCurrentSpeak(): Promise<void> {
+  // ⚠️ 同步 + 不调网络（D-ID 无 server-side stopSpeaking endpoint，P-2 实测确认）
+  // 行为：abort 渲染端的 speak() 待结 promise + 把 <video> mute 掉
+  // 用户感知：旧 reply 立即没声音（嘴可能还动几秒）
+  interruptCurrentSpeak(): void {
     if (this.currentSpeakAbort) {
       this.currentSpeakAbort.abort()
       this.currentSpeakAbort = null
     }
-    if (this.client && this.client.isOpen()) {
-      await this.client.stopSpeaking().catch(() => {})
-    }
+    useAgentStore.getState().setCloudMuted(true)
   }
 
   async closeNow(): Promise<void> {
@@ -1795,6 +1818,7 @@ export class SessionManager {
       this.currentSpeakAbort.abort()
       this.currentSpeakAbort = null
     }
+    useAgentStore.getState().setCloudMuted(false)
     if (this.client) {
       const minutes = this.client.uptimeMinutes()
       useAgentStore.getState().addCloudMinutes(minutes)
@@ -1834,7 +1858,7 @@ Expected: 所有用例 PASS。
 
 ```bash
 git add src/services/did/sessionManager.ts src/services/did/index.ts tests/sessionManager.test.ts
-git commit -m "feat(did): add SessionManager (S2 idle-timeout, interrupt, getCurrentStream)"
+git commit -m "feat(did): add SessionManager (S2 idle-timeout, abort+mute interrupt, getCurrentStream)"
 ```
 
 ---
@@ -1997,6 +2021,21 @@ describe('CloudAvatar', () => {
     rerender(<CloudAvatar />)
     expect(v.srcObject).toBeNull()
   })
+
+  it('video.muted reflects store.cloudMuted', () => {
+    useAgentStore.setState({ cloudConn: 'streaming', cloudMuted: false })
+    const { container, rerender } = render(<CloudAvatar />)
+    const v = container.querySelector('video') as HTMLVideoElement
+    expect(v.muted).toBe(false)
+
+    useAgentStore.setState({ cloudMuted: true })
+    rerender(<CloudAvatar />)
+    expect(v.muted).toBe(true)
+
+    useAgentStore.setState({ cloudMuted: false })
+    rerender(<CloudAvatar />)
+    expect(v.muted).toBe(false)
+  })
 })
 ```
 
@@ -2018,10 +2057,12 @@ import styles from './CloudAvatar.module.css'
 
 export function CloudAvatar() {
   const cloudConn = useAgentStore(s => s.cloudConn)
+  const cloudMuted = useAgentStore(s => s.cloudMuted)
   const mood = useAgentStore(s => s.mood)
   const isPushing = useAgentStore(s => s.isPushing)
   const videoRef = useRef<HTMLVideoElement>(null)
 
+  // 绑定/释放 MediaStream
   useEffect(() => {
     if (cloudConn !== 'streaming') {
       if (videoRef.current) videoRef.current.srcObject = null
@@ -2033,6 +2074,11 @@ export function CloudAvatar() {
       videoRef.current.play().catch(() => { /* autoplay rejection is fine */ })
     }
   }, [cloudConn])
+
+  // 静音订阅：cloudMuted=true 时关掉音频（D-ID 无 server-side stop，软停在 renderer 侧）
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = cloudMuted
+  }, [cloudMuted])
 
   const wrapClass = [
     styles.cloudWrap,
@@ -2123,7 +2169,7 @@ Expected: 全部 PASS。
 
 ```bash
 git add src/components/Avatar/CloudAvatar.tsx src/components/Avatar/CloudAvatar.module.css tests/CloudAvatar.test.tsx
-git commit -m "feat(avatar): add CloudAvatar (WebRTC video bound to sessionManager.getCurrentStream)"
+git commit -m "feat(avatar): add CloudAvatar (WebRTC video + cloudMuted-driven video.muted for soft-stop)"
 ```
 
 ---
@@ -2659,7 +2705,7 @@ git commit -m "feat(ui): add ModeToggle (config preflight + confirm modal + toas
     beforeEach(() => {
       mockSessionEnsureConnected.mockResolvedValue(undefined)
       mockSessionSpeak.mockResolvedValue('completed')
-      mockSessionInterrupt.mockResolvedValue(undefined)
+      mockSessionInterrupt.mockReturnValue(undefined)  // 同步，无 Promise
       mockSessionNotifyIdle.mockReturnValue(undefined)
       mockSessionCloseNow.mockResolvedValue(undefined)
       useAgentStore.setState({ renderMode: 'cloud' })
@@ -2728,7 +2774,7 @@ vi.mock('../src/services/did', () => ({
   sessionManager: {
     ensureConnected: mockSessionEnsureConnected,
     speak: mockSessionSpeak,
-    interruptCurrentSpeak: mockSessionInterrupt,
+    interruptCurrentSpeak: mockSessionInterrupt,  // 同步，返回 void
     notifyIdle: mockSessionNotifyIdle,
     closeNow: mockSessionCloseNow,
   },
@@ -2771,7 +2817,8 @@ export function useAI() {
     lipSyncController.stop()
     const modeAtStart = useAgentStore.getState().renderMode
     if (modeAtStart === 'cloud') {
-      await sessionManager.interruptCurrentSpeak()
+      // 同步调用：abort + setCloudMuted(true)，不发任何网络请求（spec Section 3）
+      sessionManager.interruptCurrentSpeak()
     }
 
     const store = useAgentStore.getState()
@@ -3073,14 +3120,17 @@ Expected: 全部 PASS / 干净。
 
 **2. Placeholder scan：**
 - ✅ 无 TBD / TODO / "implement later"
-- ⚠️ Task 4 Step 3 内的 D-ID API 端点（如 stopSpeaking 用 DELETE 还是 POST）**有 P-2 校准条款兜底**——属于"明确的不确定"而非占位
-- ⚠️ Task 4 Step 3 内 `DEFAULT_AVATAR_URL` 硬编码了一个 D-ID 默认形象 URL，**实施前需查最新文档替换**（已在 P-1 中提示）
+- ✅ P-2 已完成，所有 endpoint 字段名 / 行为按实测落到 Task 4
+- ⚠️ Task 4 内 `DEFAULT_AVATAR_URL` 硬编码 D-ID 默认形象 URL（P-2 已验证 Trial 账号可用）
+- ⚠️ Task 7 内 `submitAnswer` Cookie header 用法是推断的（P-2 未实测）；Task 7 实施时第一次跑 dev 需即时验证
 
 **3. Type 一致性：**
 - ✅ `RenderMode` / `CloudConnectionState` / `DIDError` / `DIDConfigStatus` / `DIDStreamInit` / `DIDErrorCode` — 在 Task 1 定义、贯穿后续 Task 引用一致
 - ✅ `sessionManager.speak()` 在 Task 8 定义返回 `'completed' | 'interrupted'`，Task 13 useAI 调用方按此判断
-- ✅ `interruptCurrentSpeak()` / `notifyIdle()` / `closeNow()` / `ensureConnected()` / `getCurrentStream()` 命名贯穿一致
-- ✅ `electronAPI.did*` 6 个方法名跨 Task 6（preload/types）与 Task 7 / Task 12（renderer 调用方）一致
+- ✅ `sessionManager.interruptCurrentSpeak()` **同步** void 返回（spec Section 3 + Task 8 + Task 13 三处一致）
+- ✅ `notifyIdle()` / `closeNow()` / `ensureConnected()` / `getCurrentStream()` 命名贯穿一致
+- ✅ `electronAPI.did*` **5 个**方法名（去掉 didStopSpeaking）跨 Task 6（preload/types）与 Task 7 / Task 12（renderer 调用方）一致
+- ✅ store `cloudMuted` 字段名跨 Task 2 / Task 8 / Task 10 三处一致
 
 ---
 

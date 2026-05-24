@@ -60,15 +60,19 @@ useAI 拿到 AI 回复后，根据 renderMode 二选一：
 ```ts
 renderMode: 'local' | 'cloud'         // 初值 'local'，不持久化（每次启动重置）
 cloudConn: 'idle' | 'connecting' | 'streaming' | 'error'  // 初值 'idle'
+cloudMuted: boolean                    // 初值 false；speak 被打断后置 true，下一次 speak 开始置 false
 cloudMinutesThisMonth: number          // localStorage 持久化（仅用于 UI 显示）
 cloudLastError: string | null          // 最近一次失败原因，UI 显示
 
 // actions
 setRenderMode(mode: 'local' | 'cloud'): void
 setCloudConn(state: CloudConnState): void
+setCloudMuted(muted: boolean): void
 addCloudMinutes(minutes: number): void  // 累计本月使用
 setCloudError(msg: string | null): void
 ```
+
+**为什么需要 `cloudMuted`：** D-ID Streaming API **没有真正的服务端 stopSpeaking endpoint**（P-2 实测验证）——一旦 speak POST 出去，服务端就会通过 WebRTC 流推完整个回复音视频。新一轮 sendMessage 来时无法让服务端静默，**只能 renderer 端把 `<video>` 元素 mute 掉**遮蔽旧音频。`cloudMuted` 是这个静音状态在 store 里的单一来源，CloudAvatar 订阅它驱动 `video.muted`。
 
 **状态转换图：**
 
@@ -108,30 +112,46 @@ setCloudError(msg: string | null): void
 2. D-ID 失败时自动从 'cloud' 翻回 'local'（同时 `cloudLastError` 设值，触发 toast）
 3. 应用启动 / store reset → 'local'
 
-**强制不变量：** `setRenderMode('local')` 必须同时把 `currentViseme` 重置为 `'closed'`——避免 cloud → local 切换瞬间 LocalAvatar 挂载时显示残留的非 closed 嘴型（LocalAvatar 的 useEffect cleanup 只在 unmount 时跑，挂载时不会自动 reset）。
+**强制不变量：** `setRenderMode('local')` 必须同时把 `currentViseme` 重置为 `'closed'` 且 `cloudMuted` 重置为 `false`——避免 cloud → local 切换瞬间 LocalAvatar 挂载时显示残留的非 closed 嘴型；并清理云端模式的 mute 状态。
 
 ---
 
 ## Section 2：D-ID Streaming 集成架构
 
-**D-ID Streaming Avatars** 工作流程（基于 D-ID 公开 API，**具体 endpoint URL / 字段名实现前需对照最新官方文档校准**）：
+**D-ID Streaming Avatars** 工作流程（**P-2 阶段已用 curl 实测验证 4/5 个 endpoint**，详见 `D-ID-API-CHECK.md`）：
 
 ```
-1. POST /talks/streams           → {id, offer (SDP), ice_servers, session_id}
-   body: {source_url: "<预置 avatar URL>"}
+1. POST /talks/streams
+   Headers: Authorization: Basic <DID_API_KEY>, Content-Type: application/json
+   Body:    {"source_url": "<预置 avatar URL>"}
+   Returns: 201 + {id: "strm_xxx", offer: {type, sdp}, ice_servers: [...], session_id: "AWSALB=...;AWSALBCORS=..."}
+   ⚠️ 字段是 snake_case（ice_servers / session_id）；DIDStreamingService 内做 snake→camel 转换
+   ⚠️ 实测耗时 ~9 秒（不是 1-2s）。整段 connecting 状态预计 9-12s（含 WebRTC ICE 协商）
 
 2. Renderer 建 RTCPeerConnection、setRemoteDescription(offer)、生成 answer
 
-3. POST /talks/streams/{id}/sdp  → 提交 answer SDP
-   body: {answer, session_id}
+3. POST /talks/streams/{id}/sdp
+   Headers: Authorization, Cookie: <session_id 原样>
+   Body:    {"answer": <SDP>}
+   ⚠️ session 走 Cookie header（不是 body 字段）；推断同 endpoint 5/6，Task 7 实测确认
 
 4. WebRTC ICE 协商完成，PeerConnection 收到 MediaStream → <video srcObject>
 
-5. POST /talks/streams/{id}      → 让 avatar 说话（每条回复一次）
-   body: {script: {type: 'text', input: '<reply>', provider: {type: 'microsoft', voice_id: 'zh-CN-XiaoxiaoNeural'}}, session_id}
+5. POST /talks/streams/{id}
+   Headers: Authorization, Cookie: <session_id>
+   Body:    {"script": {"type": "text", "input": "<reply, >=3 chars>", "provider": {"type": "microsoft", "voice_id": "zh-CN-XiaoxiaoNeural"}}}
+   Returns: 200 + {status: "started", video_id: "tlk_xxx"}
+   ⚠️ 不在 body 放 session_id；Cookie header 取代
+   ⚠️ input 至少 3 字符——少于则 service 层抛 DID_API（不让 D-ID 返 400）
 
-6. DELETE /talks/streams/{id}    → 关闭 session（idle timeout 或用户切回本地时）
+6. DELETE /talks/streams/{id}
+   Headers: Authorization, Cookie: <session_id>
+   Body:    （无）
+   Returns: 200 + ""
+   ⚠️ 不带 body
 ```
+
+**❌ 没有的 endpoint：** D-ID Streaming API **不提供 `DELETE /streams/{id}/speak` 或任何形式的 server-side stopSpeaking**（P-2 实测 403）。"打断旧 speak" 的实现策略见 Section 3 — **AbortController + 本地 video mute**，**不走网络**。
 
 **关键安全边界：**
 - D-ID API key 是长期凭证、**绝对不能进入 renderer**
@@ -143,26 +163,27 @@ setCloudError(msg: string | null): void
 
 | 进程 | 文件 | 职责 |
 |------|------|------|
-| **main** | `electron/services/DIDStreamingService.ts` | 持有 API key；封装 5 个 REST 调用 + 配置状态读取；返回响应 |
-| **main** | `electron/services/didStreamingHandler.ts` | 注册 5 个 IPC handler；输入校验；错误映射 |
+| **main** | `electron/services/DIDStreamingService.ts` | 持有 API key；封装 **4 个** REST 调用（createStream / submitAnswer / speak / endStream）+ 配置状态读取；返回响应 |
+| **main** | `electron/services/didStreamingHandler.ts` | 注册 **5 个** IPC handler；输入校验；错误映射 |
 | **preload** | `electron/preload.ts` | 在**现有** `window.electronAPI` 对象上**追加**新方法（**不开 `window.did` 子命名空间**，跟 `resizeWindow` / `setApiKey` / `transcribeAudio` 平铺一致） |
-| **renderer** | `src/services/did/DIDStreamClient.ts` | 管理单次 session 的 `RTCPeerConnection` 生命周期；调 `window.electronAPI.did*`；暴露 `MediaStream` getter、`speak()`、`stopSpeaking()`、`close()`。**不导出为单例**——只由 SessionManager 内部 `new` |
-| **renderer** | `src/services/did/sessionManager.ts` | **唯一**持有当前活跃的 `DIDStreamClient`；实现 S2 idle-timeout（30s 无 speak 自动 close）；暴露 `ensureConnected()` / `notifyIdle()` / `getCurrentStream()` / `interruptCurrentSpeak()` / `closeNow()` |
+| **renderer** | `src/services/did/DIDStreamClient.ts` | 管理单次 session 的 `RTCPeerConnection` 生命周期；调 `window.electronAPI.did*`；暴露 `MediaStream` getter、`speak(text, signal)`、`close()`。**不导出为单例**——只由 SessionManager 内部 `new`。**无 `stopSpeaking()`**——D-ID 无此 endpoint |
+| **renderer** | `src/services/did/sessionManager.ts` | **唯一**持有当前活跃的 `DIDStreamClient`；实现 S2 idle-timeout（30s 无 speak 自动 close）；暴露 `ensureConnected()` / `notifyIdle()` / `getCurrentStream()` / `interruptCurrentSpeak()` / `closeNow()`。interrupt 只做 abort + setCloudMuted(true)，**不调网络** |
 | **renderer** | `src/services/did/index.ts` | 仅导出 `sessionManager` 单例（**不导出** `didStreamClient` 单例——它根本不存在） |
 
-**新增 `window.electronAPI` 方法（平铺、verb-first，与现有风格一致）：**
+**新增 `window.electronAPI` 方法（平铺、verb-first，与现有风格一致）—— 5 个：**
 
 | 方法 | 入参 | 返回 |
 |---|---|---|
 | `didGetConfigStatus()` | — | `Promise<{ configured: boolean, missingKey?: boolean, errorReason?: string }>` |
-| `didCreateStream()` | — | `Promise<{ id, offer, iceServers, sessionId } \| AppError>` |
-| `didSubmitAnswer(streamId, sessionId, answer)` | strings + RTCSessionDescriptionInit | `Promise<AppError \| undefined>` |
-| `didSpeak(streamId, sessionId, text)` | strings | `Promise<AppError \| undefined>` |
-| `didStopSpeaking(streamId, sessionId)` | strings | `Promise<AppError \| undefined>`（D-ID 若不支持显式停讲，由 main 侧降级为 close+reopen 信号） |
-| `didEndStream(streamId, sessionId)` | strings | `Promise<AppError \| undefined>` |
+| `didCreateStream()` | — | `Promise<{ id, offer, iceServers, sessionId } \| AppError>`（service 内 snake→camel 转） |
+| `didSubmitAnswer(streamId, sessionId, answer)` | strings + RTCSessionDescriptionInit | `Promise<AppError \| undefined>`（service 内把 sessionId 放 Cookie header，不放 body） |
+| `didSpeak(streamId, sessionId, text)` | strings；**text.length >= 3** | `Promise<AppError \| undefined>`（service 入口校验长度；session 同样走 Cookie） |
+| `didEndStream(streamId, sessionId)` | strings | `Promise<AppError \| undefined>`（service 内 Cookie header，**无 body**） |
+
+> **`didStopSpeaking` 不存在。** D-ID Streaming API 无此 endpoint（P-2 实测 403 from CloudFront）。renderer 端"打断" 通过 `sessionManager.interruptCurrentSpeak()` 实现，**不发任何 IPC**。
 
 **IPC channel 名（仅在 main/preload 之间，renderer 不感知）：**
-`did-get-config-status` / `did-create-stream` / `did-submit-answer` / `did-speak` / `did-stop-speaking` / `did-end-stream`。
+`did-get-config-status` / `did-create-stream` / `did-submit-answer` / `did-speak` / `did-end-stream`。
 
 每个 handler 内部错误统一映射进**现有的 `AppError` 体系**（与 `chat()` / `transcribeAudio()` 一致），`code` 字段扩展新值：
 
@@ -215,21 +236,27 @@ class SessionManager {
   }
 
   // 由 useAI 在新一轮 sendMessage 开头调（cloud 模式下取代 ttsProvider.stop() 的位置），
-  // 用于打断 D-ID 还在播旧 reply 的情况——避免新 reply 开始时旧的还在出声。
+  // 用于打断 D-ID 还在播旧 reply 的情况。
   //
-  // 行为：
-  // 1. 中止上一轮 speak() 的 pending promise（abort signal）——promise resolve 为
-  //    'interrupted' 状态，**不**抛错、**不**触发 handleCloudFailure
-  // 2. 调 client.stopSpeaking() 让 D-ID 端立刻停播（API 不支持时降级为 close+重开 session）
-  // 3. 保持 client 连接不变（speak 是会话级的子操作，不需要重新建联）
-  async interruptCurrentSpeak(): Promise<void> {
+  // ⚠️ 关键限制（P-2 实测确认）：D-ID Streaming API **没有 server-side stopSpeaking endpoint**。
+  // 一旦 speak POST 出去，服务端会通过 WebRTC 推完整段视频音频，无法远程停止。
+  //
+  // 我们的策略（spec 选定方案 A，详见 D-ID-API-CHECK.md §4）：
+  // 1. 中止 renderer 端的 speak() pending promise（abort signal）——
+  //    promise resolve 为 'interrupted'，不抛错、不触发 handleCloudFailure
+  // 2. 把 store.cloudMuted 置 true —— CloudAvatar 订阅此字段把 <video> mute 掉，
+  //    用户听不到旧 reply 的音频（mouth 可能还动几秒，但无声音）
+  // 3. **不调网络**——既没真停讲又烧 IPC 时间
+  // 4. 保持 client 连接不变（下一次 speak 复用现有会话）
+  //
+  // 已知小问题（接受）：用户切换瞬间可能看到旧 reply 的嘴还在动但已无声，
+  // 持续到 D-ID 流自己耗尽旧帧（几秒内）。
+  interruptCurrentSpeak(): void {  // 注意：现在是同步的，不再 async
     if (this.currentSpeakAbort) {
       this.currentSpeakAbort.abort()
       this.currentSpeakAbort = null
     }
-    if (this.client && this.client.isOpen()) {
-      await this.client.stopSpeaking().catch(() => {})
-    }
+    useAgentStore.getState().setCloudMuted(true)
   }
 
   // 由 useAI 在切回 local 时、D-ID 报错时、或应用退出时调
@@ -239,6 +266,7 @@ class SessionManager {
       this.currentSpeakAbort.abort()
       this.currentSpeakAbort = null
     }
+    useAgentStore.getState().setCloudMuted(false)
     if (this.client) {
       const minutes = this.client.uptimeMinutes()
       useAgentStore.getState().addCloudMinutes(minutes)
@@ -252,6 +280,8 @@ class SessionManager {
     if (!this.client) throw new Error('no active client; call ensureConnected first')
     this.currentSpeakAbort = new AbortController()
     const signal = this.currentSpeakAbort.signal
+    // 新一轮 speak 开始：unmute（解除上一轮 interrupt 留下的静音状态）
+    useAgentStore.getState().setCloudMuted(false)
     try {
       await this.client.speak(text, signal)
       return signal.aborted ? 'interrupted' : 'completed'
@@ -282,6 +312,7 @@ import { sessionManager } from '../../services/did'
 
 export function CloudAvatar() {
   const cloudConn = useAgentStore(s => s.cloudConn)
+  const cloudMuted = useAgentStore(s => s.cloudMuted)
   const mood = useAgentStore(s => s.mood)
   const videoRef = useRef<HTMLVideoElement>(null)
 
@@ -300,6 +331,11 @@ export function CloudAvatar() {
     }
   }, [cloudConn])
 
+  // cloudMuted 驱动 <video> 静音 —— 用于打断旧 speak 后的"软停"（D-ID 无 server-side stop）
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = cloudMuted
+  }, [cloudMuted])
+
   // mood 仍驱动姿态动画（CSS class）
   const wrapClass = [...]
 
@@ -308,7 +344,7 @@ export function CloudAvatar() {
       <div className={wrapClass}>
         {cloudConn === 'connecting' && <ConnectingOverlay />}
         {cloudConn === 'error' && <ErrorOverlay />}
-        <video ref={videoRef} className={styles.video} playsInline muted={false} />
+        <video ref={videoRef} className={styles.video} playsInline />
       </div>
     </div>
   )
@@ -319,6 +355,7 @@ export function CloudAvatar() {
 - CloudAvatar **只读** sessionManager；不持有 client 引用、不调 speak/close/connect
 - 连接由 useAI 驱动，CloudAvatar 通过 `cloudConn` 这一个 store 字段感知"现在能拿流了"
 - `srcObject` 绑定时机：cloudConn 进入 'streaming' 之后；离开 'streaming' 立刻清空
+- `video.muted` 由 `cloudMuted` store 字段驱动，与 srcObject 解耦——SessionManager 设 mute、CloudAvatar 顺从
 - **没有第二个流引用源。** 任何"从其他地方拿 MediaStream"的实现都视为 bug。
 
 ---
@@ -378,8 +415,9 @@ const sendMessage = useCallback(async (text: string) => {
   lipSyncController.stop()             // 本地 lipsync（同上）
   const modeAtStart = useAgentStore.getState().renderMode
   if (modeAtStart === 'cloud') {
-    // 关键：让 D-ID 端立刻停播旧 reply，避免新 reply 开始时旧的还在出声
-    await sessionManager.interruptCurrentSpeak()
+    // 关键：abort 旧 speak 并把 video mute 掉（renderer 软停；D-ID 无 server-side stop）
+    // interruptCurrentSpeak 现在是同步的，不 await
+    sessionManager.interruptCurrentSpeak()
   }
 
   // ... 余下：setIsLoading, setMood('thinking'), addMessage ...
@@ -442,9 +480,9 @@ const sendMessage = useCallback(async (text: string) => {
 
 ```ts
 async function handleCloudFailure(err: DIDError, reply: string) {
-  await sessionManager.closeNow()                       // 确保 D-ID 端关掉
+  await sessionManager.closeNow()                       // 确保 D-ID 端关掉；同时 closeNow 内部把 cloudMuted 复位为 false
   const store = useAgentStore.getState()
-  store.setRenderMode('local')                          // 模式翻回本地
+  store.setRenderMode('local')                          // 模式翻回本地；同时不变量保证 currentViseme='closed' 与 cloudMuted=false
   store.setCloudError(humanReadableError(err))          // 触发 toast 显示
   store.setCloudConn('idle')
 
@@ -461,7 +499,7 @@ async function handleCloudFailure(err: DIDError, reply: string) {
 
 **不做的事：**
 - ❌ 不自动重试。失败可能是 quota 用尽，无脑重试只会烧更多钱+刷屏失败提示
-- ❌ 不在云端模式里"等更长时间再算失败"。WebRTC 建联超过 5s 就认定失败
+- ❌ 不在云端模式里"等更长时间再算失败"。**WebRTC 建联超过 15s 就认定失败**（P-2 实测 createStream 单 REST 就 9s，再加 ICE/DTLS 协商，正常路径预计 9-12s；15s 阈值留 3s 安全余量）
 - ❌ 不在失败时同时跑本地 lipsync 和云端 streaming 抢救（双声源混乱）
 
 **已知小问题（接受）：** 若 D-ID 已播出部分语音后连接中途挂掉，本地补讲会**重复**这条 reply（用户先听了云端版本前半段、再听本地版本完整版）。MVP 接受这个轻微体验割裂——优先保证"用户一定听到完整答案"，比"完美无重复"更重要。后续可在 client.speak() 提供 partial-played 信号时优化。
@@ -536,14 +574,15 @@ WebRTC 实时流**没法**用单测覆盖端到端（happy-dom 没有 RTCPeerCon
 
 | 文件 | 覆盖点 | 类型 |
 |------|--------|------|
-| `tests/DIDStreamingService.test.ts` | 6 个调用（含 `getConfigStatus` / `stopSpeaking`）：URL/header/body 正确组装；4xx/5xx 映射到正确 `DIDErrorCode`；API key 不出现在错误对象里 | 单测（fetch mock） |
+| `tests/DIDStreamingService.test.ts` | **5 个**调用（含 `getConfigStatus`，**无 stopSpeaking**）：URL/header/body 正确组装；**Cookie header 携带 session_id**（不在 body）；**createStream 响应做 snake→camel 转换**（ice_servers→iceServers / session_id→sessionId）；**speak text.length < 3 抛 DID_API 而不发请求**；**endStream 不发 body**；4xx/5xx 映射到正确 `DIDErrorCode`；API key 不出现在错误对象里 | 单测（fetch mock） |
 | `tests/didStreamingHandler.test.ts` | IPC handler 输入校验；错误映射；不泄漏 API key 到 renderer；`didGetConfigStatus` 在缺 KEY 时返 `{configured: false, missingKey: true}` 而非抛错 | 单测 |
-| `tests/sessionManager.test.ts` | idle timer 推进；`ensureConnected` 复用未关 client；`closeNow` 累加 minutes；超时后下一次 ensure 重新建联；**`interruptCurrentSpeak` 让正在 await 的 `speak()` 立刻 resolve 为 'interrupted'**；`getCurrentStream` 在无 client 时返 null | 单测（fake timers + abort signal） |
-| `tests/DIDStreamClient.test.ts` | mock `window.electronAPI.did*` + 注入假 RTCPeerConnection；验证 createStream → SDP 协商顺序；speak 支持 AbortSignal；stopSpeaking / close 调用契约；connectionState='failed' 抛 `DID_WEBRTC` | 单测（adapter mock） |
-| `tests/useAI.test.ts` | 新增：`renderMode='cloud'` 时 lipSyncController 不被调用、调 `sessionManager.speak`；speak reject 触发 fallback、`renderMode` 翻回 local、本地 lipSync 补救执行；**cloud 模式下新一轮 sendMessage 调 `interruptCurrentSpeak`**；旧 speak 返 'interrupted' 不走 finishTalking；`mockLipStart` 与 `mockSessionSpeak` 互斥 | 单测（在现有测试上扩展 cloud 路径） |
+| `tests/sessionManager.test.ts` | idle timer 推进；`ensureConnected` 复用未关 client；`closeNow` 累加 minutes + setCloudMuted(false)；超时后下一次 ensure 重新建联；**`interruptCurrentSpeak`（同步）让正在 await 的 `speak()` 立刻 resolve 为 'interrupted' 且把 cloudMuted 设 true，不调 client 网络方法**；**`speak()` 起始把 cloudMuted 设 false（unmute）**；`getCurrentStream` 在无 client 时返 null | 单测（fake timers + abort signal） |
+| `tests/DIDStreamClient.test.ts` | mock `window.electronAPI.did*` + 注入假 RTCPeerConnection；验证 createStream → SDP 协商顺序；speak 支持 AbortSignal；close 调用契约；connectionState='failed' 抛 `DID_WEBRTC`。**无 stopSpeaking 方法可测——该方法不存在** | 单测（adapter mock） |
+| `tests/useAI.test.ts` | 新增：`renderMode='cloud'` 时 lipSyncController 不被调用、调 `sessionManager.speak`；speak reject 触发 fallback、`renderMode` 翻回 local、本地 lipSync 补救执行；**cloud 模式下新一轮 sendMessage 同步调 `interruptCurrentSpeak`**；旧 speak 返 'interrupted' 不走 finishTalking；`mockLipStart` 与 `mockSessionSpeak` 互斥 | 单测（在现有测试上扩展 cloud 路径） |
 | `tests/ModeToggle.test.ts` | **mount 时调 `didGetConfigStatus`，`configured: false` 时按钮禁用 + tooltip**；configured 时点击展开 modal；confirm 设 `renderMode='cloud'`；cancel 不改；cloud→local 跳过 modal；按钮 label 跟 cloudConn 切换 | 组件测（mock `window.electronAPI`） |
 | `tests/useCloudCostTracker.test.ts` | 累加正确；跨月清零；localStorage 读写隔离 | 单测 |
 | `tests/RouterAvatar.test.ts` | renderMode='local' 渲染 LocalAvatar；'cloud' 渲染 CloudAvatar；切换时旧组件 unmount；**CloudAvatar 唯一通过 `sessionManager.getCurrentStream()` 取流**（断言它不直接 import DIDStreamClient） | 组件测 |
+| `tests/CloudAvatar.test.tsx` | **cloudMuted=true 时 `video.muted === true`**；cloudConn 进入 streaming 时绑 srcObject；离开 streaming 时清空 | 组件测 |
 
 **不写自动化测试的部分（手动验收）：**
 - 真实 D-ID WebRTC 建联速度、画质
@@ -559,10 +598,10 @@ WebRTC 实时流**没法**用单测覆盖端到端（happy-dom 没有 RTCPeerCon
 
 | 文件 | 行数估 | 职责 |
 |------|--------|------|
-| `electron/services/DIDStreamingService.ts` | ~180 | main 进程 D-ID REST 封装（含 `getConfigStatus` / `stopSpeaking`）；持有 API key |
-| `electron/services/didStreamingHandler.ts` | ~100 | 6 个 IPC handler 注册；错误映射 |
-| `src/services/did/DIDStreamClient.ts` | ~200 | renderer RTCPeerConnection 生命周期；speak（含 AbortSignal）/ stopSpeaking / close。**仅 SessionManager 内部 new**，不导出单例 |
-| `src/services/did/sessionManager.ts` | ~120 | S2 idle-timeout；client 复用；`getCurrentStream` / `interruptCurrentSpeak` / `speak`（abort 包装） |
+| `electron/services/DIDStreamingService.ts` | ~180 | main 进程 D-ID REST 封装（含 `getConfigStatus`，**5 个方法不含 stopSpeaking**）；持有 API key；session 走 Cookie header；createStream 响应 snake→camel 转换 |
+| `electron/services/didStreamingHandler.ts` | ~80 | **5 个** IPC handler 注册；错误映射 |
+| `src/services/did/DIDStreamClient.ts` | ~180 | renderer RTCPeerConnection 生命周期；speak（含 AbortSignal）/ close。**无 stopSpeaking 方法**（D-ID 无对应 endpoint）。**仅 SessionManager 内部 new**，不导出单例 |
+| `src/services/did/sessionManager.ts` | ~130 | S2 idle-timeout；client 复用；`getCurrentStream` / `interruptCurrentSpeak`（同步，abort + setCloudMuted(true)，不调网络）/ `speak`（abort 包装 + setCloudMuted(false) 起始解除静音）/ `closeNow`（reset cloudMuted） |
 | `src/services/did/index.ts` | ~3 | **仅**导出 `sessionManager` 单例 |
 | `src/services/did/types.ts` | ~30 | `DIDErrorCode`、`DIDStreamConfig` 等 |
 | `src/components/Avatar/LocalAvatar.tsx` | ~50 | 当前 Avatar 整段搬过来 |
@@ -578,11 +617,11 @@ WebRTC 实时流**没法**用单测覆盖端到端（happy-dom 没有 RTCPeerCon
 | 文件 | 改动 |
 |------|------|
 | `src/components/Avatar/index.tsx` | 整个文件改成 5 行 RouterAvatar；原内容已搬至 LocalAvatar |
-| `src/store/agentStore.ts` | 新增 `renderMode` / `cloudConn` / `cloudMinutesThisMonth` / `cloudLastError` + 4 个 setter；`reset()` 把 `renderMode` 复位 `'local'` |
-| `src/hooks/useAI.ts` | 在响应后按 renderMode 分支；新增 `handleCloudFailure`；catch 块也要 close cloud session |
-| `electron/main.ts` | 注册 6 个 DID IPC handler；`before-quit` 关 session |
-| `electron/preload.ts` | 在 `window.electronAPI` 对象上**追加** `didGetConfigStatus` / `didCreateStream` / `didSubmitAnswer` / `didSpeak` / `didStopSpeaking` / `didEndStream` 6 个方法（平铺，跟现有方法风格一致，**不开 `window.did` 子命名空间**） |
-| `src/types/electron.d.ts` | 在现有 `electronAPI` interface 上追加 6 个方法类型 |
+| `src/store/agentStore.ts` | 新增 `renderMode` / `cloudConn` / `cloudMuted` / `cloudMinutesThisMonth` / `cloudLastError` + 5 个 setter；`reset()` 复位全部新字段；`setRenderMode('local')` 同步重置 `currentViseme='closed'` + `cloudMuted=false`（强制不变量） |
+| `src/hooks/useAI.ts` | 在响应后按 renderMode 分支；cloud 模式下 sendMessage 头部同步调 `sessionManager.interruptCurrentSpeak()`（**不 await**）；新增 `handleCloudFailure`；catch 块也要 close cloud session |
+| `electron/main.ts` | 注册 **5 个** DID IPC handler；`before-quit` 关 session |
+| `electron/preload.ts` | 在 `window.electronAPI` 对象上**追加** `didGetConfigStatus` / `didCreateStream` / `didSubmitAnswer` / `didSpeak` / `didEndStream` **5 个**方法（平铺，跟现有方法风格一致，**不开 `window.did` 子命名空间**） |
+| `src/types/electron.d.ts` | 在现有 `electronAPI` interface 上追加 **5 个**方法类型 |
 | `shared/types.ts` | 新增 `RenderMode` / `CloudConnectionState` / `DIDErrorCode` / `DIDError` |
 | `.env.example` | 新增 `DID_API_KEY=` |
 | `src/App.tsx` | 在顶层渲染 `<ModeToggle />`；toast 容器 |
@@ -615,9 +654,9 @@ main 进程启动时读取，缺失 `DID_API_KEY` → 不抛错。`didGetConfigS
 **分支：** 从 `main` 新建 `feature/did-streaming-demo-mode`，worktree 置于 `.worktrees/feature-did-streaming-demo-mode/`。
 
 **前置条件（动代码前必须备齐）：**
-1. ✅ D-ID 付费账号开通（Pro 档以上，含 Streaming Avatars 权限）
-2. ✅ API key 拿到、信用卡绑好
-3. ✅ 用 curl/Postman 手动验过至少 1 次 createStream API 通（确认 API 文档与实现假设一致）
+1. ✅ D-ID 账号（**Trial 档已足够 P-2 验证**，正式跑长时间需 Lite/Pro 看分钟数预算）
+2. ✅ API key 拿到、`.env` 填好 `DID_API_KEY`
+3. ✅ **已用 curl 实测过 4/5 endpoint**（详 `D-ID-API-CHECK.md`）。submitAnswer 因需真 WebRTC SDP 没法 curl 测，留到 Task 7 实现时即时联调
 
 **自动验收：**
 - 全量 `npx vitest run` 通过
@@ -628,12 +667,14 @@ main 进程启动时读取，缺失 `DID_API_KEY` → 不抛错。`didGetConfigS
 1. `.env` 不填 `DID_API_KEY` → toggle 按钮禁用，hover 显示 tooltip
 2. 填上 key → toggle 可点；点 OFF→ON 弹 modal，显示本月用量
 3. confirm → toggle 立即显示 "演示模式 · 待机"（cloudConn = idle，**此时还没建联**——与 Section 1 状态机一致）
-4. 第一次发问题 → toggle 切到 "连接中..." → 1-2s 后切到 "演示模式 · 已就绪"（cloudConn: idle → connecting → streaming）→ 看到真人级头像讲话、口型与中文对得上
+4. 第一次发问题 → toggle 切到 "连接中..." → **9-12s** 后切到 "演示模式 · 已就绪"（cloudConn: idle → connecting → streaming）→ 看到真人级头像讲话、口型与中文对得上。**若超过 15s 仍未 streaming → 视为 DID_WEBRTC 错误，自动 fallback（验收 7）**
 5. 30s 不发问题 → toggle 自动回到 "演示模式 · 待机"（cloudConn 回 idle，session 已关）
 6. 再发问题 → 自动重建联 → 又是 "已就绪" + 真人讲话
 7. **拔网线 / mock API 返 500** → 看到 toast 提示 + toggle 翻回 OFF + 本地补讲这条 reply
 8. 切回 local → 立即 CloudAvatar 卸载、LocalAvatar 挂载、嘴回 closed
 9. 关闭 app → D-ID dashboard 上看不到悬挂 session
+10. **打断旧 speak 的软停验收（A 方案关键）：** 发问题 A → 真人讲到一半 → 立刻发问题 B。预期：A 的视频立刻**静音**（嘴可能还动几秒——D-ID 流惯性，无法服务端停），但**听不到 A 的声音**；约 1-2s 后 B 的视频流接管，重新有声音
+11. **少于 3 字符的 AI 回复（如 "好"）** → cloud 模式下 service 层应在 IPC 边界拦截、不打到 D-ID（避免 400 ValidationError）。表现：直接走 fallback 本地讲
 
 ---
 
@@ -641,13 +682,17 @@ main 进程启动时读取，缺失 `DID_API_KEY` → 不抛错。`didGetConfigS
 
 | 风险 | 缓解 |
 |------|------|
-| D-ID API 字段名/endpoint 与本设计假设不符 | Section 14 前置条件 3：动代码前必须 curl 验过；spec 实施阶段第一个 task 就是文档校验 |
+| ~~D-ID API 字段名/endpoint 与本设计假设不符~~ | ✅ **已 P-2 实测确认**（4/5 endpoint），spec 已按实际改 |
+| ~~stopSpeaking 服务端无法真停~~ | ✅ **已确认无该 endpoint**；A 方案 abort + 本地 mute 落地 |
+| submitAnswer 字段名/Cookie 用法未实测 | Task 7 实现时第一时间联调验证；最坏情况按本 spec 推断（Cookie header）走 |
 | 中文 voice 口型对齐可能不如英文好 | 验收第 4 条手动验证；若不达标考虑 voice_id 切换或 fallback 提示 |
-| WebRTC 在用户网络环境下不稳定 | 自动回本地兜底；失败 toast 让用户感知 |
+| WebRTC 在用户网络环境下不稳定 | 自动回本地兜底；失败 toast 让用户感知；15s 建联超时阈值 |
 | Streaming session 异常未关导致计费泄漏 | `closeNow()` 容错 + `before-quit` 兜底 + D-ID 自身有 session timeout |
 | 月度费用失控 | `useCloudCostTracker` UI 提醒；不做硬上限（用户自管） |
+| 旧 speak 视频惯性（mute 后画面仍动几秒） | A 方案接受；用户感知是"嘴动但无声"，比"嘴动有声且和新 reply 重叠"好得多 |
+| D-ID 连续 speak 的服务端行为未知（队列 vs 替换） | Task 7 实现联调时记录；若是队列模式，可能要在每条 speak 间插 1s 延迟 |
 
-**实施前需补充：**
-- D-ID 官方文档校对（endpoint URL、字段名、错误码）
-- 预置 Avatar URL 确认（D-ID 提供的免费形象 URL 是否长期稳定）
-- voice_id 是否在所选档位可用
+**实施前已补充：**
+- ✅ D-ID 官方 API 端点（curl 校对完，详见 `D-ID-API-CHECK.md`）
+- ✅ 预置 Avatar URL（`https://create-images-results.d-id.com/DefaultPresenters/Emma_f/image.png` Trial 账号可用）
+- ✅ voice_id `zh-CN-XiaoxiaoNeural` 在 Trial 档可用（speak 成功响应）
