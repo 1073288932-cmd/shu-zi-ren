@@ -1,0 +1,77 @@
+.avatar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0 8px;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.characterWrap {
+  position: relative;
+  width: 240px;
+  height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: idle-float 3s ease-in-out infinite;
+
+  /* 嘴型 overlay 校准变量（已对齐 839x1083 无嘴角色图的嘴部）。
+     --mouth-w 控制 overlay 屏幕显示尺寸；高度按 256:128 自动等比。 */
+  --mouth-x: 52.5%;
+  --mouth-y: 52.5%;
+  --mouth-w: 18%;
+}
+
+.characterImg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+.mouthOverlay {
+  position: absolute;
+  left: var(--mouth-x);
+  top: var(--mouth-y);
+  width: var(--mouth-w);
+  height: auto;            /* 由 <img> 按 256:128 自动保持比例 */
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+@keyframes idle-float {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-5px); }
+}
+
+.thinking { animation: thinking-pulse 0.9s ease-in-out infinite; }
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.7; transform: scale(0.96); }
+}
+
+.talking { animation: talking-bob 0.5s ease-in-out infinite alternate; }
+@keyframes talking-bob {
+  from { transform: translateY(0); }
+  to   { transform: translateY(-2px); }
+}
+
+.error { animation: error-shake 0.45s ease-in-out forwards; }
+@keyframes error-shake {
+  0%, 100% { transform: translateX(0); }
+  20%     { transform: translateX(-5px); }
+  40%     { transform: translateX(5px); }
+  60%     { transform: translateX(-4px); }
+  80%     { transform: translateX(4px); }
+}
+
+.pushing { animation: pushing-bounce 0.55s ease-in-out infinite alternate; }
+@keyframes pushing-bounce {
+  from { transform: translateY(0) rotate(0deg); }
+  to   { transform: translateY(-8px) rotate(3deg); }
+}

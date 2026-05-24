@@ -1,4 +1,6 @@
+node_modules/
 .superpowers/
 .DS_Store
 .claude/
 .worktrees/
+.env
