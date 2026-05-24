@@ -604,7 +604,7 @@ DID_AVATAR_SOURCE_URL=https://...         # 可选，D-ID 预置 avatar URL；�
 DID_VOICE_ID=zh-CN-XiaoxiaoNeural         # 可选，默认普通话女声
 ```
 
-main 进程启动时读取，缺失 `DID_API_KEY` → 不抛错，但 IPC `did:create-stream` 调用时返回 `DID_AUTH` 错误（让 toggle 自然禁用）。
+main 进程启动时读取，缺失 `DID_API_KEY` → 不抛错。`didGetConfigStatus()` IPC 同步返回 `{ configured: false, missingKey: true, errorReason: '未配置 D-ID API Key — 请在 .env 中填入 DID_API_KEY' }`。ModeToggle 在 mount 时拿到该结果就**直接禁用按钮**（详见 Section 9）——renderer 永远不会真的去调 `didCreateStream`，也就不会撞到 `DID_AUTH` 错误路径。
 
 **严禁：** 任何 D-ID 配置出现在 `src/`、`shared/` 的代码里——它们打包进 renderer 就暴露给浏览器 devtools 了。
 
@@ -627,10 +627,10 @@ main 进程启动时读取，缺失 `DID_API_KEY` → 不抛错，但 IPC `did:c
 **手动验收（不可由测试替代）：**
 1. `.env` 不填 `DID_API_KEY` → toggle 按钮禁用，hover 显示 tooltip
 2. 填上 key → toggle 可点；点 OFF→ON 弹 modal，显示本月用量
-3. confirm → toggle 进入 connecting → 1-2s 后切到 streaming
-4. 发问题 → 看到真人级头像讲话、口型与中文对得上
-5. 30s 不发问题 → toggle 自动回到 "演示模式 · 待机"（session 已关）
-6. 再发问题 → 自动重建联 → 又是 streaming
+3. confirm → toggle 立即显示 "演示模式 · 待机"（cloudConn = idle，**此时还没建联**——与 Section 1 状态机一致）
+4. 第一次发问题 → toggle 切到 "连接中..." → 1-2s 后切到 "演示模式 · 已就绪"（cloudConn: idle → connecting → streaming）→ 看到真人级头像讲话、口型与中文对得上
+5. 30s 不发问题 → toggle 自动回到 "演示模式 · 待机"（cloudConn 回 idle，session 已关）
+6. 再发问题 → 自动重建联 → 又是 "已就绪" + 真人讲话
 7. **拔网线 / mock API 返 500** → 看到 toast 提示 + toggle 翻回 OFF + 本地补讲这条 reply
 8. 切回 local → 立即 CloudAvatar 卸载、LocalAvatar 挂载、嘴回 closed
 9. 关闭 app → D-ID dashboard 上看不到悬挂 session
