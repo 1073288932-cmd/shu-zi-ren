@@ -5,3 +5,7 @@ node_modules/
 .worktrees/
 .env
 D-ID-API-CHECK.md
+XINGYUN-API-CHECK.md
+spike/
+dist/
+dist-electron/
