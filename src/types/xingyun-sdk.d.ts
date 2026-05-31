@@ -11,6 +11,7 @@ export interface XmovAvatarOptions {
 }
 
 export interface XmovAvatarInstance {
+  init(options?: { onDownloadProgress?: (progress: number) => void }): Promise<void> | void
   speak(ssml: string, isStart: boolean, isEnd: boolean): void
   interactiveidle(): void
   idle(): void

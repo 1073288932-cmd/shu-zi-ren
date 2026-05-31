@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { XingyunClient } from '../src/services/xingyun/XingyunClient'
 import type { XmovAvatarOptions, XmovAvatarInstance } from '../src/types/xingyun-sdk'
 import type { XingyunConfig } from '@shared/types'
@@ -9,9 +9,11 @@ const cfg: XingyunConfig = { appId: 'a', appSecret: 's', gatewayServer: 'wss://g
 class FakeSdk implements XmovAvatarInstance {
   opts: XmovAvatarOptions
   speakCalls: Array<[string, boolean, boolean]> = []
+  initCalls = 0
   interrupted = 0
   destroyed = 0
   constructor(opts: XmovAvatarOptions) { this.opts = opts }
+  init() { this.initCalls++ }
   speak(ssml: string, s: boolean, e: boolean) { this.speakCalls.push([ssml, s, e]) }
   interactiveidle() { this.interrupted++ }
   idle() {}
@@ -29,8 +31,12 @@ function make(): { client: XingyunClient; sdk: () => FakeSdk } {
   return { client, sdk: () => sdk }
 }
 
+afterEach(() => {
+  vi.useRealTimers()
+})
+
 describe('XingyunClient.open', () => {
-  it('constructs SDK with #containerId + config, resolves on ready state', async () => {
+  it('constructs SDK with #containerId + config, calls init, resolves on ready state', async () => {
     const { client, sdk } = make()
     const p = client.open(cfg, 'xingyun-stage')
     sdk().emitState('idle')              // 就绪态
@@ -39,6 +45,15 @@ describe('XingyunClient.open', () => {
     expect(sdk().opts.appId).toBe('a')
     expect(sdk().opts.appSecret).toBe('s')
     expect(sdk().opts.gatewayServer).toBe('wss://gw')
+    expect(sdk().initCalls).toBe(1)
+    expect(client.isOpen()).toBe(true)
+  })
+
+  it('resolves on real Xingyun ready state interactive_idle', async () => {
+    const { client, sdk } = make()
+    const p = client.open(cfg, 'xingyun-stage')
+    sdk().emitState('interactive_idle')
+    await expect(p).resolves.toBeUndefined()
     expect(client.isOpen()).toBe(true)
   })
 
@@ -47,6 +62,17 @@ describe('XingyunClient.open', () => {
     const p = client.open(cfg, 'xingyun-stage')
     sdk().emitMessage({ code: 40001, msg: 'auth fail' })
     await expect(p).rejects.toMatchObject({ code: 'XY_CONNECT' })
+  })
+
+  it('destroys SDK when connect times out', async () => {
+    vi.useFakeTimers()
+    const { client, sdk } = make()
+    const p = client.open(cfg, 'xingyun-stage')
+    const expectation = expect(p).rejects.toMatchObject({ code: 'XY_CONNECT' })
+    await vi.advanceTimersByTimeAsync(180_000)
+    await expectation
+    expect(sdk().destroyed).toBe(1)
+    expect(client.isOpen()).toBe(false)
   })
 })
 
@@ -87,8 +113,20 @@ describe('XingyunClient.speak', () => {
   it('rejects XY_SPEAK on fatal onMessage during speak', async () => {
     const { client, sdk } = await opened()
     const sp = client.speak('讲一段话')
-    sdk().emitMessage({ code: 50002, msg: 'stream error' })
+    sdk().emitMessage({ code: 50004, msg: 'stream error' })
     await expect(sp).rejects.toMatchObject({ code: 'XY_SPEAK' })
+  })
+
+  it('ignores non-fatal AUDIO_DATA_EXPIRED (40007) during speak', async () => {
+    const { client, sdk } = await opened()
+    const sp = client.speak('讲一段话')
+    sdk().emitMessage({ code: 40007, message: '音频数据过期' })
+    let settled = false
+    void sp.then(() => { settled = true }, () => { settled = true })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    sdk().emitVoice('end')
+    await expect(sp).resolves.toBe('completed')
   })
 
   it('benign onMessage (no error code) does not settle pending speak', async () => {

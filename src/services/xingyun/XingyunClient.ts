@@ -5,17 +5,19 @@ import { buildSSML } from './ssml'
 
 type SdkFactory = (options: XmovAvatarOptions) => XmovAvatarInstance
 
-// 首连含 3D 资源下载（实测 ~30s）；复用连接后无此问题
-const CONNECT_TIMEOUT_MS = 30_000
+// 首连含 3D 资源下载；真机首日联调可超过 60s，复用连接后无此问题
+const CONNECT_TIMEOUT_MS = 180_000
 // 就绪态：onStateChange 进入运行态即视为连上（实现首日按真实取值确认/收窄）
-const READY_STATES = new Set(['idle', 'interactiveidle', 'listen', 'think'])
+const READY_STATES = new Set(['idle', 'interactiveidle', 'interactive_idle', 'listen', 'think'])
 
 // 魔珐错误码段 10001–50004；onMessage 也会带 widget/info 等非错误消息，需甄别
 function looksLikeError(msg: unknown): boolean {
   if (!msg || typeof msg !== 'object') return false
   const m = msg as Record<string, unknown>
   const code = m.code ?? m.errorCode ?? m.error_code
-  if (typeof code === 'number' && code >= 10000) return true
+  const numericCode = typeof code === 'number' ? code : Number(code)
+  if (numericCode === 40007) return false
+  if (Number.isFinite(numericCode) && numericCode >= 10000) return true
   return m.type === 'error'
 }
 function describeMsg(msg: unknown): string {
@@ -51,6 +53,7 @@ export class XingyunClient {
       const timer = setTimeout(() => {
         if (settled) return
         settled = true
+        this.destroy()
         reject(xyError('XY_CONNECT', `建联超时（>${CONNECT_TIMEOUT_MS}ms）`))
       }, CONNECT_TIMEOUT_MS)
 
@@ -94,6 +97,8 @@ export class XingyunClient {
             this.opened = false
           },
         })
+        const initResult = this.sdk.init()
+        void Promise.resolve(initResult).catch(finishOpen)
       } catch (e) {
         finishOpen(e)
       }
