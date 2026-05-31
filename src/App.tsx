@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import { Avatar } from './components/Avatar'
+import { ModeToggle } from './components/ModeToggle'
 import { ResourceCard } from './components/ResourceCard'
 import { InputBar } from './components/InputBar'
 import { useAgentStore } from './store/agentStore'
@@ -16,6 +17,7 @@ export default function App() {
 
   return (
     <div className={styles.shell} ref={shellRef}>
+      <ModeToggle />
       <Avatar />
 
       {resourceCards.length > 0 && (
