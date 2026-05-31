@@ -12,6 +12,7 @@ class FakeSdk implements XmovAvatarInstance {
   initCalls = 0
   initOptions: Array<{ onDownloadProgress?: (progress: number) => void } | undefined> = []
   interrupted = 0
+  idled = 0
   destroyed = 0
   constructor(opts: XmovAvatarOptions) { this.opts = opts }
   init(options?: { onDownloadProgress?: (progress: number) => void }) {
@@ -20,7 +21,7 @@ class FakeSdk implements XmovAvatarInstance {
   }
   speak(ssml: string, s: boolean, e: boolean) { this.speakCalls.push([ssml, s, e]) }
   interactiveidle() { this.interrupted++ }
-  idle() {}
+  idle() { this.idled++ }
   offlineMode() {}
   destroy() { this.destroyed++ }
   // 测试触发器
@@ -120,6 +121,13 @@ describe('XingyunClient.speak', () => {
     client.interrupt()
     await expect(sp).resolves.toBe('interrupted')
     expect(sdk().interrupted).toBe(1)
+  })
+
+  it('idle() asks SDK to stay idle without destroying the avatar', async () => {
+    const { client, sdk } = await opened()
+    client.idle()
+    expect(sdk().idled).toBe(1)
+    expect(sdk().destroyed).toBe(0)
   })
 
   it('destroy() resolves pending speak "interrupted" (never rejects) then destroys', async () => {

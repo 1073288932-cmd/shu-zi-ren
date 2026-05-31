@@ -9,6 +9,7 @@ function fakeClient(over: Partial<XingyunClient> = {}): XingyunClient {
     open: vi.fn().mockResolvedValue(undefined),
     speak: vi.fn().mockResolvedValue('completed'),
     interrupt: vi.fn(),
+    idle: vi.fn(),
     destroy: vi.fn(),
     ...over,
   } as unknown as XingyunClient
@@ -49,16 +50,14 @@ describe('SessionManager', () => {
     await expect(sm.ensureConnected()).rejects.toMatchObject({ code: 'XY_NOT_CONFIGURED' })
   })
 
-  it('notifyIdle destroys the client after IDLE_TIMEOUT and sets cloudConn idle', async () => {
-    vi.useFakeTimers()
-    const client = fakeClient({ isOpen: vi.fn().mockReturnValue(false) })
+  it('notifyIdle keeps the cloud avatar connected and asks SDK to enter idle', async () => {
+    const client = fakeClient({ isOpen: vi.fn().mockReturnValue(true) })
     const sm = new SessionManager(() => client)
     await sm.ensureConnected()
     sm.notifyIdle()
-    await vi.advanceTimersByTimeAsync(60_000)
-    expect(client.destroy).toHaveBeenCalled()
-    expect(useAgentStore.getState().cloudConn).toBe('idle')
-    vi.useRealTimers()
+    expect(client.idle).toHaveBeenCalled()
+    expect(client.destroy).not.toHaveBeenCalled()
+    expect(useAgentStore.getState().cloudConn).toBe('streaming')
   })
 
   it('closeNow destroys the client and sets cloudConn idle', async () => {
@@ -92,6 +91,36 @@ describe('SessionManager', () => {
     await Promise.all([p1, p2])
     expect(client.open).toHaveBeenCalledTimes(1)
     expect(factoryCalls).toBe(1)      // 不会并发造第二个 client
+  })
+
+  it('closeNow cancels an in-flight connect so remount starts a fresh SDK client', async () => {
+    let resolveFirst!: () => void
+    let resolveSecond!: () => void
+    const c1 = fakeClient({
+      isOpen: vi.fn().mockReturnValue(false),
+      open: vi.fn().mockReturnValue(new Promise<void>(r => { resolveFirst = r })),
+    })
+    const c2 = fakeClient({
+      isOpen: vi.fn().mockReturnValue(false),
+      open: vi.fn().mockReturnValue(new Promise<void>(r => { resolveSecond = r })),
+    })
+    const queue = [c1, c2]
+    const sm = new SessionManager(() => queue.shift()!)
+
+    const first = sm.ensureConnected()
+    const firstExpectation = expect(first).rejects.toMatchObject({ code: 'XY_CONNECT' })
+    await vi.waitFor(() => expect(c1.open).toHaveBeenCalled())
+    await sm.closeNow()
+    expect(c1.destroy).toHaveBeenCalled()
+
+    const second = sm.ensureConnected()
+    resolveFirst()
+    await firstExpectation
+    resolveSecond()
+    await expect(second).resolves.toBe(c2)
+
+    expect(c2.open).toHaveBeenCalledTimes(1)
+    expect(useAgentStore.getState().cloudConn).toBe('streaming')
   })
 
   it('destroys a stale (closed) client before reconnecting', async () => {

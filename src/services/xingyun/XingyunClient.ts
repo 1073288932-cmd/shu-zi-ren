@@ -141,6 +141,10 @@ export class XingyunClient {
     try { this.sdk?.interactiveidle() } catch { /* ignore */ }
   }
 
+  idle(): void {
+    try { this.sdk?.idle() } catch { /* ignore */ }
+  }
+
   destroy(): void {
     this.settleInterrupted()        // 主动断开绝不 reject pending（避免误判失败）
     try { this.sdk?.destroy() } catch { /* ignore */ }
