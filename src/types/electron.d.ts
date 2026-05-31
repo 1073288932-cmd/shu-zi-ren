@@ -2,6 +2,7 @@ import type {
   AppError,
   AIResponse,
   AgentMessage,
+  XingyunConfigStatus,
 } from '@shared/types'
 
 declare global {
@@ -14,6 +15,7 @@ declare global {
       chat(messages: AgentMessage[]): Promise<AIResponse | AppError>
       setApiKey(key: string): Promise<AppError | undefined>
       transcribeAudio(buffer: ArrayBuffer): Promise<AppError | string>
+      xingyunGetConfig(): Promise<XingyunConfigStatus>
     }
   }
 }
