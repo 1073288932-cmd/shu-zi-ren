@@ -6,6 +6,7 @@ export class EmbeddingClient {
   constructor(
     private readonly apiKey: string,
     private readonly fetchImpl: typeof fetch = fetch,
+    private readonly timeoutMs = 30_000,
   ) {}
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -17,7 +18,7 @@ export class EmbeddingClient {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ model: EMBEDDING_MODEL, input: texts }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(this.timeoutMs),
     })
     if (!res.ok) throw new Error(`embeddings HTTP ${res.status}`)
     const data = (await res.json()) as { data: Array<{ embedding: number[] }> }

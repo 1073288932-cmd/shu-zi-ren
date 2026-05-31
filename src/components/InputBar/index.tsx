@@ -8,6 +8,21 @@ interface InputBarProps {
   retry: () => void
 }
 
+// ASR 错误码 → 面向用户的提示。之前 onError 把错误全吞了，
+// 导致缺 key / 权限被拒等故障静默无反馈。
+const ASR_ERROR_MESSAGES: Record<string, string> = {
+  'permission-denied': '麦克风权限被拒绝，请在系统设置中允许',
+  'start-failed': '麦克风启动失败，请重试',
+  'empty-transcript': '没有听到声音，请重试',
+  'ASR_TOO_LARGE': '录音太长，请重试',
+  'ASR_UNAVAILABLE': '语音识别未配置',
+  'ASR_INVALID': '录音数据异常，请重试',
+}
+
+function asrErrorMessage(code: string): string {
+  return ASR_ERROR_MESSAGES[code] ?? '语音识别失败，请重试'
+}
+
 export function InputBar({ sendMessage, retry }: InputBarProps) {
   const inputText = useAgentStore(state => state.inputText)
   const setInputText = useAgentStore(state => state.setInputText)
@@ -17,6 +32,7 @@ export function InputBar({ sendMessage, retry }: InputBarProps) {
 
   const [isListening, setIsListening] = useState(false)
   const [interimText, setInterimText] = useState('')
+  const [asrError, setAsrError] = useState<string | null>(null)
   const [apiKeyInput, setApiKeyInput] = useState('')
   const [apiKeyError, setApiKeyError] = useState<string | null>(null)
   const [isSavingKey, setIsSavingKey] = useState(false)
@@ -30,8 +46,9 @@ export function InputBar({ sendMessage, retry }: InputBarProps) {
         setInterimText('')
       }
     })
-    asrProvider.onError(() => {
+    asrProvider.onError((code: string) => {
       setIsListening(false)
+      setAsrError(asrErrorMessage(code))
     })
     asrProvider.onEnd(() => {
       setIsListening(false)
@@ -55,6 +72,7 @@ export function InputBar({ sendMessage, retry }: InputBarProps) {
   function handleMicPointerDown(e: React.PointerEvent) {
     e.preventDefault()
     if (isLoading || !asrProvider.available) return
+    setAsrError(null)
     asrProvider.start()
     setIsListening(true)
   }
@@ -123,12 +141,18 @@ export function InputBar({ sendMessage, retry }: InputBarProps) {
         </div>
       )}
 
+      {asrError && (
+        <div className={styles.retryRow}>
+          <span className={styles.errorText}>{asrError}</span>
+        </div>
+      )}
+
       <div className={styles.row}>
         <textarea
           className={styles.input}
           placeholder={isListening ? '正在聆听…' : '问我任何物理问题…'}
           value={displayText}
-          onChange={e => { if (!isListening) setInputText(e.target.value) }}
+          onChange={e => { if (!isListening) { setAsrError(null); setInputText(e.target.value) } }}
           onKeyDown={handleKeyDown}
           disabled={isLoading}
           rows={1}

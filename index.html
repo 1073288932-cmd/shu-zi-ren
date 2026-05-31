@@ -4,8 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'" />
+      content="default-src 'self';
+               script-src 'self' blob:;
+               style-src 'self' 'unsafe-inline';
+               connect-src 'self' https://*.xingyun3d.com wss://*.xingyun3d.com https://public-xmov.oss-cn-hangzhou.aliyuncs.com;
+               img-src 'self' data: blob: https://*.xingyun3d.com;
+               media-src 'self' blob: https://*.xingyun3d.com;
+               worker-src 'self' blob:" />
     <title>数字人助手</title>
+    <!-- 魔珐 SDK：vendor 本地、由 'self' 加载，注册 window.XmovAvatar -->
+    <script src="/vendor/xmovAvatar.js"></script>
   </head>
   <body>
     <div id="root"></div>

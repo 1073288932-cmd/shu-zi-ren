@@ -33,6 +33,14 @@ describe('createKbRetriever', () => {
     expect(await r.retrieve('摩擦力')).toEqual([])
   })
 
+  it('skips embedding during cooldown after a failure', async () => {
+    const client = fakeClient(async () => { throw new Error('network') })
+    const r = createKbRetriever(client, chunks, { ...opts, failureCooldownMs: 60_000 })
+    expect(await r.retrieve('摩擦力')).toEqual([])
+    expect(await r.retrieve('摩擦力')).toEqual([])
+    expect(client.embed).toHaveBeenCalledTimes(1)
+  })
+
   it('returns [] when index has no chunks', async () => {
     const r = createKbRetriever(fakeClient(async () => [[1, 0]]), [], opts)
     expect(await r.retrieve('摩擦力')).toEqual([])

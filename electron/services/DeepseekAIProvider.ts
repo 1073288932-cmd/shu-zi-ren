@@ -5,6 +5,7 @@ import type { KbRetriever } from './knowledge/retriever'
 import { buildKbContext } from './knowledge/buildKbContext'
 
 const DEEPSEEK_URL = 'https://api.deepseek.com/chat/completions'
+const DEEPSEEK_TIMEOUT_MS = 45_000
 
 function buildSystemPrompt(catalog: ResourceCatalogService, kbContext: string): string {
   const kbBlock = kbContext ? `\n\n${kbContext}` : ''
@@ -74,7 +75,7 @@ export class DeepseekAIProvider {
         response_format: { type: 'json_object' },
         messages: [{ role: 'system', content: buildSystemPrompt(catalog, kbContext) }, ...messages],
       }),
-      signal: AbortSignal.timeout(15_000),
+      signal: AbortSignal.timeout(DEEPSEEK_TIMEOUT_MS),
     })
 
     if (!response.ok) {

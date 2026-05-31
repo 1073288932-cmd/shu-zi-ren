@@ -15,7 +15,8 @@ import { loadKnowledgeIndex } from './services/knowledge/knowledgeIndex'
 import { EmbeddingClient } from './services/knowledge/embeddingClient'
 import { createKbRetriever } from './services/knowledge/retriever'
 import type { KbRetriever } from './services/knowledge/retriever'
-import type { AppError } from '../shared/types'
+import { getXingyunConfig } from './services/xingyunConfigHandler'
+import type { AppError, XingyunConfigStatus } from '../shared/types'
 
 // MVP: hardcoded resource whitelist. Replace with config file loader later.
 const RESOURCE_BASE_DIR = path.join(app.getPath('home'), 'Desktop')
@@ -59,7 +60,7 @@ function makeDeepseekProvider(): DeepseekAIProvider {
   let retriever: KbRetriever | undefined
   const sfKey = process.env.SILICONFLOW_API_KEY ?? ''
   if (kbIndex && sfKey) {
-    retriever = createKbRetriever(new EmbeddingClient(sfKey), kbIndex.chunks)
+    retriever = createKbRetriever(new EmbeddingClient(sfKey, fetch, 4_000), kbIndex.chunks)
   }
   return new DeepseekAIProvider(apiKey, retriever)
 }
@@ -209,4 +210,12 @@ ipcMain.handle('chat', async (event, messages: unknown) => {
   } catch (err) {
     return mapDeepseekError(err)
   }
+})
+
+// IPC: 魔珐 config（含 sender 校验——返回 appSecret，必须确认是真实窗口）
+ipcMain.handle('xingyun-get-config', (event): XingyunConfigStatus => {
+  if (!BrowserWindow.fromWebContents(event.sender)) {
+    return { configured: false, missingKey: true, errorReason: 'invalid sender' }
+  }
+  return getXingyunConfig()
 })

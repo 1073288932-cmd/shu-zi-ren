@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import { EmbeddingClient } from '../../electron/services/knowledge/embeddingClient'
 
 function okFetch(vectors: number[][]) {
@@ -10,6 +10,10 @@ function okFetch(vectors: number[][]) {
 }
 
 describe('EmbeddingClient', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('posts model + input and returns embeddings in order', async () => {
     const fetchImpl = okFetch([[0.1, 0.2], [0.3, 0.4]])
     const client = new EmbeddingClient('sk-test', fetchImpl as unknown as typeof fetch)
@@ -34,5 +38,15 @@ describe('EmbeddingClient', () => {
     const fetchImpl = vi.fn().mockResolvedValue({ ok: false, status: 401 } as Response)
     const client = new EmbeddingClient('sk-test', fetchImpl as unknown as typeof fetch)
     await expect(client.embed(['a'])).rejects.toThrow(/401/)
+  })
+
+  it('uses custom timeout when provided', async () => {
+    const signal = new AbortController().signal
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(signal)
+    const fetchImpl = okFetch([[0.1, 0.2]])
+    const client = new EmbeddingClient('sk-test', fetchImpl as unknown as typeof fetch, 4_000)
+    await client.embed(['a'])
+    expect(timeoutSpy).toHaveBeenCalledWith(4_000)
+    expect((fetchImpl.mock.calls[0][1] as RequestInit).signal).toBe(signal)
   })
 })

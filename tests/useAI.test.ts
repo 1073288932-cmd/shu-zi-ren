@@ -20,6 +20,23 @@ vi.mock('../src/services/lipsync', () => ({
   lipSyncController: { start: mockLipStart, stop: mockLipStop },
 }))
 
+const mockEnsure = vi.hoisted(() => vi.fn())
+const mockSessionSpeak = vi.hoisted(() => vi.fn())
+const mockInterrupt = vi.hoisted(() => vi.fn())
+const mockNotifyIdle = vi.hoisted(() => vi.fn())
+const mockSessionClose = vi.hoisted(() => vi.fn())
+
+vi.mock('../src/services/xingyun', () => ({
+  sessionManager: {
+    ensureConnected: mockEnsure,
+    speak: mockSessionSpeak,
+    interrupt: mockInterrupt,
+    notifyIdle: mockNotifyIdle,
+    closeNow: mockSessionClose,
+  },
+  XINGYUN_CONTAINER_ID: 'xingyun-stage',
+}))
+
 const mockReply = 'Test AI reply about friction'
 const mockResponse: AIResponse = {
   reply: mockReply,
@@ -35,6 +52,10 @@ describe('useAI', () => {
     vi.useFakeTimers()
     useAgentStore.setState(initialState)
 
+    mockEnsure.mockResolvedValue(undefined)
+    mockSessionSpeak.mockResolvedValue('completed')
+    mockSessionClose.mockResolvedValue(undefined)
+
     // mock 必须模拟真实 LipSyncController contract，否则 currentViseme 断言无意义：
     // start(text, cb) 立即用回调推一个非 closed viseme（真实是序列首帧）；
     // stop() 强制把 viseme 推回 closed（spec Section 5）。
@@ -44,6 +65,8 @@ describe('useAI', () => {
     mockLipStop.mockImplementation(() => {
       useAgentStore.getState().setCurrentViseme('closed')
     })
+
+    useAgentStore.setState({ renderMode: 'local' })   // 现有 local 路径用例保持成立
   })
 
   afterEach(() => {
@@ -161,5 +184,52 @@ describe('useAI', () => {
     await act(async () => { result.current.sendMessage('hi'); await vi.runAllTicks() })
     expect(mockLipStop).toHaveBeenCalled()
     expect(useAgentStore.getState().mood).toBe('error')
+  })
+
+  describe('cloud mode (魔珐)', () => {
+    beforeEach(() => {
+      useAgentStore.setState({ renderMode: 'cloud' })
+    })
+
+    it('cloud path calls sessionManager.speak, NOT lipSync', async () => {
+      const { result } = renderHook(() => useAI())
+      await act(async () => { result.current.sendMessage('摩擦力'); await vi.runAllTicks() })
+      expect(mockSessionSpeak).toHaveBeenCalledWith(mockReply)
+      expect(mockLipStart).not.toHaveBeenCalled()
+    })
+
+    it('completed speak calls notifyIdle and returns to idle', async () => {
+      mockSessionSpeak.mockResolvedValue('completed')
+      const { result } = renderHook(() => useAI())
+      await act(async () => { result.current.sendMessage('摩擦力'); await vi.runAllTicks() })
+      expect(mockNotifyIdle).toHaveBeenCalled()
+      expect(useAgentStore.getState().mood).toBe('idle')
+    })
+
+    it('interrupted speak does NOT notifyIdle and does NOT fallback', async () => {
+      mockSessionSpeak.mockResolvedValue('interrupted')
+      const { result } = renderHook(() => useAI())
+      await act(async () => { result.current.sendMessage('摩擦力'); await vi.runAllTicks() })
+      expect(mockNotifyIdle).not.toHaveBeenCalled()
+      expect(mockLipStart).not.toHaveBeenCalled()      // 没有本地补讲
+      expect(useAgentStore.getState().renderMode).toBe('cloud')  // 没被翻回 local
+    })
+
+    it('rejected speak falls back to local: renderMode→local + local lipSync 补讲', async () => {
+      mockSessionSpeak.mockRejectedValue({ code: 'XY_SPEAK', message: 'boom', recoverable: true })
+      const { result } = renderHook(() => useAI())
+      await act(async () => { result.current.sendMessage('摩擦力'); await vi.runAllTicks() })
+      expect(useAgentStore.getState().renderMode).toBe('local')
+      expect(useAgentStore.getState().cloudLastError).toBeTruthy()
+      expect(mockLipStart).toHaveBeenCalledWith(mockReply, expect.any(Function))
+    })
+
+    it('new message interrupts current speak (cloud)', async () => {
+      mockSessionSpeak.mockResolvedValueOnce('interrupted').mockResolvedValue('completed')
+      const { result } = renderHook(() => useAI())
+      await act(async () => { result.current.sendMessage('first'); await vi.runAllTicks() })
+      await act(async () => { result.current.sendMessage('second'); await vi.runAllTicks() })
+      expect(mockInterrupt).toHaveBeenCalled()
+    })
   })
 })
