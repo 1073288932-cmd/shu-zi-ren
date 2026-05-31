@@ -7,9 +7,24 @@ export function CloudAvatar() {
   const cloudConn = useAgentStore(s => s.cloudConn)
   const mood = useAgentStore(s => s.mood)
 
-  // 卸载（切回 local / 退出）时断开 SDK，停止计费
+  // 魔珐模式打开即连接，让首屏直接出现 3D 数字人；卸载时断开 SDK，停止计费。
   useEffect(() => {
-    return () => { void sessionManager.closeNow() }
+    let alive = true
+    void sessionManager.ensureConnected()
+      .then(() => {
+        if (!alive) void sessionManager.closeNow()
+      })
+      .catch(() => {
+        if (!alive) return
+        const st = useAgentStore.getState()
+        st.setCloudError('魔珐连接失败，已切回本地模式')
+        st.setRenderMode('local')
+        void sessionManager.closeNow()
+      })
+    return () => {
+      alive = false
+      void sessionManager.closeNow()
+    }
   }, [])
 
   const wrapClass = [
