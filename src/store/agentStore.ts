@@ -1,5 +1,8 @@
 import { create } from 'zustand'
-import type { AvatarMood, AgentMessage, ResourceCard, AppError, Viseme } from '@shared/types'
+import type {
+  AvatarMood, AgentMessage, ResourceCard, AppError, Viseme,
+  RenderMode, CloudConnectionState,
+} from '@shared/types'
 
 interface AgentStoreState {
   mood: AvatarMood
@@ -12,6 +15,10 @@ interface AgentStoreState {
   resourceCards: ResourceCard[]
   selectedResourceId: string | null
   currentViseme: Viseme
+  // 魔珐 cloud-mode
+  renderMode: RenderMode
+  cloudConn: CloudConnectionState
+  cloudLastError: string | null
 
   setMood: (mood: AvatarMood) => void
   setIsPushing: (isPushing: boolean) => void
@@ -24,6 +31,10 @@ interface AgentStoreState {
   removeResourceCard: (id: string) => void
   setSelectedResourceId: (id: string | null) => void
   setCurrentViseme: (viseme: Viseme) => void
+  // 魔珐 cloud-mode
+  setRenderMode: (mode: RenderMode) => void
+  setCloudConn: (state: CloudConnectionState) => void
+  setCloudError: (msg: string | null) => void
   reset: () => void
 }
 
@@ -38,6 +49,9 @@ export const initialState = {
   resourceCards: [] as ResourceCard[],
   selectedResourceId: null as string | null,
   currentViseme: 'closed' as Viseme,
+  renderMode: 'cloud' as RenderMode,
+  cloudConn: 'idle' as CloudConnectionState,
+  cloudLastError: null as string | null,
 }
 
 export const useAgentStore = create<AgentStoreState>()(set => ({
@@ -55,5 +69,12 @@ export const useAgentStore = create<AgentStoreState>()(set => ({
     set(state => ({ resourceCards: state.resourceCards.filter(c => c.id !== id) })),
   setSelectedResourceId: selectedResourceId => set({ selectedResourceId }),
   setCurrentViseme: currentViseme => set({ currentViseme }),
+
+  // setRenderMode('local') 必须同步重置 currentViseme（spec Section 1 强制不变量）
+  setRenderMode: mode => set(mode === 'local'
+    ? { renderMode: 'local', currentViseme: 'closed' as Viseme }
+    : { renderMode: 'cloud' }),
+  setCloudConn: cloudConn => set({ cloudConn }),
+  setCloudError: cloudLastError => set({ cloudLastError }),
   reset: () => set(initialState),
 }))

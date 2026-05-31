@@ -92,4 +92,45 @@ describe('agentStore', () => {
     useAgentStore.getState().reset()
     expect(useAgentStore.getState().currentViseme).toBe('closed')
   })
+
+  it('initial renderMode is cloud, cloudConn idle, cloudLastError null', () => {
+    const s = useAgentStore.getState()
+    expect(s.renderMode).toBe('cloud')
+    expect(s.cloudConn).toBe('idle')
+    expect(s.cloudLastError).toBeNull()
+  })
+
+  it('setRenderMode("local") resets currentViseme to "closed"', () => {
+    useAgentStore.setState({ renderMode: 'cloud', currentViseme: 'a' })
+    useAgentStore.getState().setRenderMode('local')
+    expect(useAgentStore.getState().renderMode).toBe('local')
+    expect(useAgentStore.getState().currentViseme).toBe('closed')
+  })
+
+  it('setRenderMode("cloud") does NOT touch currentViseme', () => {
+    useAgentStore.setState({ renderMode: 'local', currentViseme: 'a' })
+    useAgentStore.getState().setRenderMode('cloud')
+    expect(useAgentStore.getState().currentViseme).toBe('a')
+  })
+
+  it('setCloudConn updates cloudConn', () => {
+    useAgentStore.getState().setCloudConn('connecting')
+    expect(useAgentStore.getState().cloudConn).toBe('connecting')
+  })
+
+  it('setCloudError sets and clears cloudLastError', () => {
+    useAgentStore.getState().setCloudError('boom')
+    expect(useAgentStore.getState().cloudLastError).toBe('boom')
+    useAgentStore.getState().setCloudError(null)
+    expect(useAgentStore.getState().cloudLastError).toBeNull()
+  })
+
+  it('reset restores renderMode=cloud, cloudConn=idle, cloudLastError=null', () => {
+    useAgentStore.setState({ renderMode: 'local', cloudConn: 'streaming', cloudLastError: 'x' })
+    useAgentStore.getState().reset()
+    const s = useAgentStore.getState()
+    expect(s.renderMode).toBe('cloud')
+    expect(s.cloudConn).toBe('idle')
+    expect(s.cloudLastError).toBeNull()
+  })
 })
