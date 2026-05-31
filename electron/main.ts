@@ -11,6 +11,10 @@ import { DeepseekAIProvider } from './services/DeepseekAIProvider'
 import { validateChatMessages } from './services/validateChatMessages'
 import { mapDeepseekError } from './services/mapDeepseekError'
 import { handleTranscribeAudio } from './services/transcribeAudioHandler'
+import { loadKnowledgeIndex } from './services/knowledge/knowledgeIndex'
+import { EmbeddingClient } from './services/knowledge/embeddingClient'
+import { createKbRetriever } from './services/knowledge/retriever'
+import type { KbRetriever } from './services/knowledge/retriever'
 import type { AppError } from '../shared/types'
 
 // MVP: hardcoded resource whitelist. Replace with config file loader later.
@@ -31,6 +35,14 @@ if (missingIds.length > 0) {
 let apiKey = ''
 let deepseekProvider!: DeepseekAIProvider
 
+// Knowledge base is optional: missing or incompatible indexes simply disable textbook context.
+const kbIndex = loadKnowledgeIndex(path.join(__dirname, '../knowledge/index.json'))
+if (kbIndex) {
+  console.log(`[kb] index loaded: ${kbIndex.chunks.length} chunks (${kbIndex.embeddingModel})`)
+} else {
+  console.log('[kb] no usable index; KB disabled, answering without textbooks')
+}
+
 function reloadApiKey(): void {
   apiKey = process.env.DEEPSEEK_API_KEY ?? ''
   if (apiKey) return
@@ -41,6 +53,15 @@ function reloadApiKey(): void {
       apiKey = config.deepseekApiKey
     }
   } catch { /* config not found or parse error */ }
+}
+
+function makeDeepseekProvider(): DeepseekAIProvider {
+  let retriever: KbRetriever | undefined
+  const sfKey = process.env.SILICONFLOW_API_KEY ?? ''
+  if (kbIndex && sfKey) {
+    retriever = createKbRetriever(new EmbeddingClient(sfKey), kbIndex.chunks)
+  }
+  return new DeepseekAIProvider(apiKey, retriever)
 }
 
 let mainWindow: BrowserWindow | null = null
@@ -88,7 +109,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   reloadApiKey()
-  deepseekProvider = new DeepseekAIProvider(apiKey)
+  deepseekProvider = makeDeepseekProvider()
 
   // Allow microphone permission for Web Speech ASR
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
@@ -165,7 +186,7 @@ ipcMain.handle('set-api-key', async (event, key: unknown): Promise<AppError | un
     try { existing = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown> } catch { /* first time */ }
     fs.writeFileSync(configPath, JSON.stringify({ ...existing, deepseekApiKey: key.trim() }, null, 2), 'utf-8')
     reloadApiKey()
-    deepseekProvider = new DeepseekAIProvider(apiKey)
+    deepseekProvider = makeDeepseekProvider()
     return undefined
   } catch {
     return { code: 'AI_ERROR', message: '保存 API Key 失败，请检查应用权限', recoverable: true }
@@ -189,4 +210,3 @@ ipcMain.handle('chat', async (event, messages: unknown) => {
     return mapDeepseekError(err)
   }
 })
-
