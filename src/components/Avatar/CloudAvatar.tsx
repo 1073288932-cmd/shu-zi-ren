@@ -14,10 +14,11 @@ export function CloudAvatar() {
       .then(() => {
         if (!alive) void sessionManager.closeNow()
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (!alive) return
         const st = useAgentStore.getState()
-        st.setCloudError('魔珐连接失败，已切回本地模式')
+        const reason = err instanceof Error ? err.message : String(err)
+        st.setCloudError(`魔珐连接失败：${reason}，已切回本地模式`)
         st.setRenderMode('local')
         void sessionManager.closeNow()
       })

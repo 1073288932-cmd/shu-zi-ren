@@ -10,10 +10,14 @@ class FakeSdk implements XmovAvatarInstance {
   opts: XmovAvatarOptions
   speakCalls: Array<[string, boolean, boolean]> = []
   initCalls = 0
+  initOptions: Array<{ onDownloadProgress?: (progress: number) => void } | undefined> = []
   interrupted = 0
   destroyed = 0
   constructor(opts: XmovAvatarOptions) { this.opts = opts }
-  init() { this.initCalls++ }
+  init(options?: { onDownloadProgress?: (progress: number) => void }) {
+    this.initCalls++
+    this.initOptions.push(options)
+  }
   speak(ssml: string, s: boolean, e: boolean) { this.speakCalls.push([ssml, s, e]) }
   interactiveidle() { this.interrupted++ }
   idle() {}
@@ -21,6 +25,7 @@ class FakeSdk implements XmovAvatarInstance {
   destroy() { this.destroyed++ }
   // 测试触发器
   emitState(st: string) { this.opts.onStateChange?.(st) }
+  emitDownloadProgress(progress: number) { this.initOptions[0]?.onDownloadProgress?.(progress) }
   emitVoice(st: string) { this.opts.onVoiceStateChange?.(st) }
   emitMessage(m: unknown) { this.opts.onMessage?.(m) }
 }
@@ -40,12 +45,14 @@ describe('XingyunClient.open', () => {
     const { client, sdk } = make()
     const p = client.open(cfg, 'xingyun-stage')
     sdk().emitState('idle')              // 就绪态
+    sdk().emitDownloadProgress(100)      // 资源/首屏完成
     await expect(p).resolves.toBeUndefined()
     expect(sdk().opts.containerId).toBe('#xingyun-stage')
     expect(sdk().opts.appId).toBe('a')
     expect(sdk().opts.appSecret).toBe('s')
     expect(sdk().opts.gatewayServer).toBe('wss://gw')
     expect(sdk().initCalls).toBe(1)
+    expect(typeof sdk().initOptions[0]?.onDownloadProgress).toBe('function')
     expect(client.isOpen()).toBe(true)
   })
 
@@ -53,8 +60,21 @@ describe('XingyunClient.open', () => {
     const { client, sdk } = make()
     const p = client.open(cfg, 'xingyun-stage')
     sdk().emitState('interactive_idle')
+    sdk().emitDownloadProgress(100)
     await expect(p).resolves.toBeUndefined()
     expect(client.isOpen()).toBe(true)
+  })
+
+  it('does not resolve on ready state until SDK download/render progress reaches 100', async () => {
+    const { client, sdk } = make()
+    const p = client.open(cfg, 'xingyun-stage')
+    let settled = false
+    void p.then(() => { settled = true }, () => { settled = true })
+    sdk().emitState('interactive_idle')
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    sdk().emitDownloadProgress(100)
+    await expect(p).resolves.toBeUndefined()
   })
 
   it('rejects XY_CONNECT on fatal onMessage before ready', async () => {
@@ -81,6 +101,7 @@ describe('XingyunClient.speak', () => {
     const h = make()
     const p = h.client.open(cfg, 'xingyun-stage')
     h.sdk().emitState('idle')
+    h.sdk().emitDownloadProgress(100)
     await p
     return h
   }

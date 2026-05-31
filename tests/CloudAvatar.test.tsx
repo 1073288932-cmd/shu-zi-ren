@@ -34,7 +34,7 @@ describe('CloudAvatar', () => {
     await waitFor(() => {
       expect(useAgentStore.getState().renderMode).toBe('local')
     })
-    expect(useAgentStore.getState().cloudLastError).toBe('魔珐连接失败，已切回本地模式')
+    expect(useAgentStore.getState().cloudLastError).toBe('魔珐连接失败：boom，已切回本地模式')
   })
 
   it('shows connecting overlay when cloudConn=connecting', () => {

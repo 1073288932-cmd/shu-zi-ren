@@ -50,6 +50,8 @@ export class XingyunClient {
   open(config: XingyunConfig, containerId: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       let settled = false
+      let downloadComplete = false
+      let stateReady = false
       const timer = setTimeout(() => {
         if (settled) return
         settled = true
@@ -66,6 +68,10 @@ export class XingyunClient {
         resolve()
       }
 
+      const maybeFinishOpen = () => {
+        if (downloadComplete && stateReady) finishOpen()
+      }
+
       try {
         this.sdk = this.sdkFactory({
           containerId: `#${containerId}`,
@@ -74,7 +80,10 @@ export class XingyunClient {
           gatewayServer: config.gatewayServer,
           enableLogger: false,
           onStateChange: (state: string) => {
-            if (READY_STATES.has(state)) finishOpen()
+            if (READY_STATES.has(state)) {
+              stateReady = true
+              maybeFinishOpen()
+            }
           },
           onVoiceStateChange: (status: string) => {
             if (status === 'end' && this.pendingSpeak) {
@@ -97,7 +106,14 @@ export class XingyunClient {
             this.opened = false
           },
         })
-        const initResult = this.sdk.init()
+        const initResult = this.sdk.init({
+          onDownloadProgress: (progress: number) => {
+            if (progress >= 100) {
+              downloadComplete = true
+              maybeFinishOpen()
+            }
+          },
+        })
         void Promise.resolve(initResult).catch(finishOpen)
       } catch (e) {
         finishOpen(e)
