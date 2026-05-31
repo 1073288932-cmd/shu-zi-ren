@@ -55,24 +55,34 @@ interface Chunk {
 }
 
 interface KnowledgeIndexFile {
-  model: string         // 'BAAI/bge-m3'
-  dim: number           // 1024
-  builtAt: string       // ISO
-  chunks: Chunk[]       // 含 vector
+  version: number          // index 文件格式版本（首版 = 1），加载时校验已知版本
+  embeddingModel: string   // 'BAAI/bge-m3'，运行时模型不符则降级
+  embeddingDim: number     // 1024，与运行时期望维度不符则降级
+  chunkSize: number        // 建库时的 chunk 字数（记录用，便于追溯/复现）
+  chunkOverlap: number     // 建库时的 overlap
+  builtAt: string          // ISO
+  chunks: Chunk[]          // 含 vector
 }
 ```
 
-## Section 2：检索参数与降级（默认值，首日可调）
+> 这些元信息的意义：换 embedding 模型/维度或重调 chunk 参数后，旧 `index.json` 与新代码可能不兼容；运行时按 `version`/`embeddingModel`/`embeddingDim` 校验，不符就降级（不注入）而非误用旧索引产生错误检索。
 
-- **embedding 模型**：`BAAI/bge-m3`（Silicon Flow，1024 维，中文/长文强）。备选 `BAAI/bge-large-zh-v1.5`。建索引与查询**必须同模型**（index.json 记 `model`，加载时校验，不一致则报错/降级）。
-- **chunk**：~400 字/块，overlap ~80 字；标题优先切分。
-- **检索**：`topK=5`；相似度阈值 `minScore`（默认 ~0.40，首日按真实命中分布调）；命中按相似度降序，累计到字数预算 `maxContextChars ~3500` 为止。
+## Section 2：检索参数与失败策略（首日默认值，后续按教材实测调）
+
+- **鉴权/模型**：embedding 复用 `SILICONFLOW_API_KEY`（与语音转写同一把 key，env-only，不入 UI/不入 userData），默认模型 `BAAI/bge-m3`（Silicon Flow，1024 维，中文/长文强；备选 `BAAI/bge-large-zh-v1.5`）。建索引与查询**必须同模型同维度**——index.json 记 `embeddingModel`/`embeddingDim`，运行时加载校验，不符则降级。
+- **首日默认参数**（写成带注释的常量，后续实测再调）：
+  - `chunkSize ≈ 800` 字、`chunkOverlap ≈ 120` 字
+  - `topK = 5`、`similarityThreshold ≈ 0.45`、`maxContextChars ≈ 3500`
+  - 标题优先切分，单块超长再按字数切。
+- **检索**：命中按相似度降序 → 过滤掉 `< similarityThreshold` 的 → 累计到 `maxContextChars` 为止。
 - **query**：最新一条 `role==='user'` 消息的文本（不做多轮拼接）。
-- **降级（关键，绝不阻断回答）**：
-  - `index.json` 不存在 / 解析失败 / `chunks` 为空 → 不注入，按现状回答。
-  - `embed(query)` 抛错 / 超时 → catch，不注入，照常回答。
-  - 检索结果全部低于阈值 → 不注入。
-  - 模型维度与 index 不符 → 不注入并 `console.warn`。
+- **失败策略——明确区分两阶段**：
+  - **build-kb（离线建库）失败 = 大声报错退出**：缺 key、读不到教材、embedding 接口报错且重试耗尽、写盘失败 → 打印清晰原因并 `process.exit(1)`，**绝不产出半成品 index.json**。
+  - **chat（运行时查询）失败 = 静默降级、绝不阻断回答**：
+    - `index.json` 不存在 / 解析失败 / `version` 未知 / `chunks` 为空 → 不注入，按现状回答。
+    - `embeddingModel` 或 `embeddingDim` 与运行时配置不符 → 不注入 + `console.warn`（防换模型/换维度后误用旧索引）。
+    - `embed(query)` 抛错 / 超时 → catch，不注入，照常回答。
+    - 检索结果全部 `< similarityThreshold` → 不注入。
 - **性能**：index.json 启动加载一次（几 MB、几千块可接受）；余弦对全量线性扫描（几千块 < 10ms）。每次提问多一个 embedding 调用，~100–300ms。
 
 ## Section 3：提示词注入（教材优先、可补充）
@@ -80,15 +90,19 @@ interface KnowledgeIndexFile {
 在现有 `buildSystemPrompt` 基础上，命中时**插入**一段（未命中则不插）：
 
 ```
-以下是与当前问题相关的教材参考资料（按相关度排序）：
+以下是与当前问题相关的教材参考资料（仅供你参考，按相关度排序）：
 【人教版 八年级下 · 8.3 摩擦力】<片段正文>
 【…】<片段正文>
 
-回答时优先依据上述教材的内容、定义与术语；教材未覆盖的点可用通识补充，但以教材为准；不要编造教材中不存在的内容。
+作答要求：
+1. 教材优先——优先依据上述教材的内容、定义、术语和讲法作答；
+2. 可补充——教材未覆盖的点可用通识适度补充，但以教材为准，不编造教材中不存在的内容；
+3. 不过度超纲——贴合教材所在学段的深度，不引入明显超出该学段的概念或推导；
+4. 不暴露检索过程——绝不在回答里提及"教材参考资料/片段/相似度/检索/章节编号"等字样，也不要罗列出处；自然作答，仿佛知识本就如此。
 ```
 
 - 返回格式仍是 `{"reply":..., "resourceIds":[...]}`，**不新增字段、不改 parser、不改 UI**。
-- 教材名/章节标签只给模型看，不在 reply 里强制展示（静默贴近）。
+- 教材名/章节标签只给模型看（帮助它定位），不在 reply 里展示（静默贴近）。
 
 ## Section 4：存储、git 与打包
 
@@ -102,8 +116,9 @@ interface KnowledgeIndexFile {
 
 - TS 脚本，经 `tsx`（或 `vite-node`）运行；新增 `npm run build-kb`。
 - 复用 `chunker` + `embeddingClient`（同一份 TS，被脚本与 app 共享）。
-- 流程：读 `.env`（`SILICONFLOW_API_KEY`）→ 遍历 `knowledge/textbooks/*.md`（教材名取自文件名或 front-matter）→ chunker → 分批 embed（限速避免触发频控）→ 写 `index.json` + 打印块数/耗时。
-- 教材变更时重跑即可（幂等覆盖）。
+- 流程：读 `.env`（`SILICONFLOW_API_KEY`）→ 遍历 `knowledge/textbooks/*.md`（教材名优先取 front-matter `textbook:`，缺省用文件名）→ chunker → 分批 embed（限速避免触发频控）→ 写 `index.json`（含 §数据结构 的全部元信息）+ 打印块数/耗时。
+- **失败即 `process.exit(1)`**：任一步失败（缺 key/读不到教材/embedding 重试耗尽/写盘失败）打印清晰原因并非 0 退出，绝不写出半成品 index.json。
+- 教材变更时重跑即可（幂等覆盖整份 index.json）。
 
 ## Section 6：错误处理细则
 
@@ -153,11 +168,13 @@ interface KnowledgeIndexFile {
 
 ## Section 9：首日可调项（实现后按真实数据调）
 
-- `minScore` 阈值：先按几条真实提问看命中分布再定（太高漏召、太低塞噪音）。
-- chunk 大小 / topK / maxContextChars：按教材结构与回答质量微调。
-- 模型：若 `bge-m3` 中文表现不如 `bge-large-zh-v1.5`，切换并重建索引。
+- `similarityThreshold` 阈值：先按几条真实提问看命中分布再定（太高漏召、太低塞噪音）。
+- `chunkSize` / `chunkOverlap` / `topK` / `maxContextChars`：按教材结构与回答质量微调（改 chunk 参数需重建索引）。
+- 模型：若 `bge-m3` 中文表现不如 `bge-large-zh-v1.5`，切换并重建索引（index.json 的 `embeddingModel`/`embeddingDim` 会让旧索引自动降级，不会误用）。
 
 ## Section 10：分支与验收
 
 - 从 `main` 起 worktree `feature/physics-kb-rag`（独立于 `feature/xingyun-streaming`，二者改动不重叠）。
-- 验收：`tsc` 干净 + 全量单测过 + `build-kb` 能对样例教材产出 index.json + 手动问几条教材相关问题，回答明显引用教材内容/术语；问教材外问题仍正常（降级）。
+- **gitignore 验收（明确项）**：`git status` / `git check-ignore` 确认 `knowledge/textbooks/`、`knowledge/index.json`、`.env` **都不进 git**；`knowledge/README.md`、`.env.example` 等示例/说明**可以**提交。提交前再核一遍，避免出版物文本或密钥误入仓。
+- 功能验收：`tsc` 干净 + 全量单测过 + `build-kb` 能对样例教材产出 index.json（含完整元信息）+ 手动问几条教材相关问题，回答明显贴合教材内容/术语**且不暴露检索过程**；问教材外问题仍正常（降级，不阻断）。
+- 失败策略验收：故意删 key/删 index.json，确认运行时**静默降级照常回答**；故意让 build-kb 缺 key，确认它**报错 `exit(1)` 不产出半成品**。
