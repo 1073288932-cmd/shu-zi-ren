@@ -1,0 +1,17 @@
+/* shell 是 -webkit-app-region: drag 区域；交互组件必须显式 no-drag 才能点击，否则会变成拖窗口 */
+.root {
+  position: absolute; top: 8px; right: 8px; z-index: 10;
+  -webkit-app-region: no-drag;
+}
+.toggle {
+  font-size: 12px; padding: 4px 10px; border: 0; border-radius: 999px;
+  background: rgba(37, 99, 235, 0.9); color: #fff; cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.toggle:disabled { opacity: 0.45; cursor: not-allowed; }
+.toast {
+  position: absolute; top: 32px; right: 0; width: 220px;
+  font-size: 12px; padding: 8px 10px; border-radius: 8px;
+  background: #b91c1c; color: #fff; cursor: pointer;
+  -webkit-app-region: no-drag;
+}

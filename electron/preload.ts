@@ -37,4 +37,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   transcribeAudio(buffer: ArrayBuffer): Promise<import('../shared/types').AppError | string> {
     return ipcRenderer.invoke('transcribe-audio', buffer)
   },
+
+  xingyunGetConfig(): Promise<import('../shared/types').XingyunConfigStatus> {
+    return ipcRenderer.invoke('xingyun-get-config')
+  },
 })
