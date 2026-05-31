@@ -41,3 +41,28 @@ export interface AppError {
   message: string
   recoverable: boolean
 }
+
+// ============= 魔珐星云 具身驱动 =============
+
+export type RenderMode = 'cloud' | 'local'
+
+export type CloudConnectionState = 'idle' | 'connecting' | 'streaming' | 'error'
+
+export type XingyunErrorCode =
+  | 'XY_NOT_CONFIGURED'   // .env 缺 APP_ID/APP_SECRET
+  | 'XY_SCRIPT'           // SDK 脚本未加载
+  | 'XY_CONNECT'          // 建联超时 / 就绪前致命错
+  | 'XY_SPEAK'            // speak 期致命错
+  | 'XY_SDK'              // 其他 SDK 错误
+
+export type XingyunError = AppError & { code: XingyunErrorCode }
+
+export interface XingyunConfig {
+  appId: string
+  appSecret: string
+  gatewayServer: string
+}
+
+export type XingyunConfigStatus =
+  | ({ configured: true } & XingyunConfig)
+  | { configured: false; missingKey: true; errorReason: string }
