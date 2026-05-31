@@ -24,12 +24,6 @@ describe('CloudAvatar', () => {
     expect(getByText('连接中…')).not.toBeNull()
   })
 
-  it('shows error overlay when cloudConn=error', () => {
-    useAgentStore.setState({ cloudConn: 'error' })
-    const { getByText } = render(<CloudAvatar />)
-    expect(getByText('连接失败')).not.toBeNull()
-  })
-
   it('calls sessionManager.closeNow on unmount', () => {
     const { unmount } = render(<CloudAvatar />)
     unmount()

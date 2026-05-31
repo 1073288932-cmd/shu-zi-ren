@@ -46,7 +46,8 @@ export interface AppError {
 
 export type RenderMode = 'cloud' | 'local'
 
-export type CloudConnectionState = 'idle' | 'connecting' | 'streaming' | 'error'
+// 失败时状态机直接翻回 local（conn=idle）+ toast，从不停在独立的 'error' 态
+export type CloudConnectionState = 'idle' | 'connecting' | 'streaming'
 
 export type XingyunErrorCode =
   | 'XY_NOT_CONFIGURED'   // .env 缺 APP_ID/APP_SECRET

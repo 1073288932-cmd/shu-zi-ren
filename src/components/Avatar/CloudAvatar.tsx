@@ -23,7 +23,6 @@ export function CloudAvatar() {
     <div className={styles.avatar}>
       <div className={wrapClass}>
         {cloudConn === 'connecting' && <div className={styles.overlay}>连接中…</div>}
-        {cloudConn === 'error' && <div className={styles.overlay}>连接失败</div>}
         {/* 魔珐 SDK 把 3D 自绘进这个容器；非 <video>，无 MediaStream */}
         <div id={XINGYUN_CONTAINER_ID} className={styles.stage} />
       </div>
