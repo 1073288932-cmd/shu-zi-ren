@@ -77,4 +77,31 @@ describe('SessionManager', () => {
     sm.interrupt()
     expect(client.interrupt).toHaveBeenCalled()
   })
+
+  it('dedupes concurrent ensureConnected: opens exactly once while connecting', async () => {
+    let resolveOpen!: () => void
+    const client = fakeClient({
+      isOpen: vi.fn().mockReturnValue(false),
+      open: vi.fn().mockReturnValue(new Promise<void>(r => { resolveOpen = r })),
+    })
+    let factoryCalls = 0
+    const sm = new SessionManager(() => { factoryCalls++; return client })
+    const p1 = sm.ensureConnected()
+    const p2 = sm.ensureConnected()   // 建联中再次请求 → 复用在途 promise
+    resolveOpen()
+    await Promise.all([p1, p2])
+    expect(client.open).toHaveBeenCalledTimes(1)
+    expect(factoryCalls).toBe(1)      // 不会并发造第二个 client
+  })
+
+  it('destroys a stale (closed) client before reconnecting', async () => {
+    const c1 = fakeClient({ isOpen: vi.fn().mockReturnValue(false) })
+    const c2 = fakeClient({ isOpen: vi.fn().mockReturnValue(false) })
+    const queue = [c1, c2]
+    const sm = new SessionManager(() => queue.shift()!)
+    await sm.ensureConnected()   // 开 c1（isOpen=false）
+    await sm.ensureConnected()   // c1 已失效 → 重连前必须 destroy c1，再开 c2
+    expect(c1.destroy).toHaveBeenCalled()
+    expect(c2.open).toHaveBeenCalledTimes(1)
+  })
 })
