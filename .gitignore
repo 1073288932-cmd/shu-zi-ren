@@ -9,3 +9,5 @@ XINGYUN-API-CHECK.md
 spike/
 dist/
 dist-electron/
+knowledge/textbooks/
+knowledge/index.json

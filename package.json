@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build-kb": "tsx scripts/build-kb.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "package": "vite build && electron-builder"
@@ -28,6 +29,7 @@
     "electron-builder": "^24.13.3",
     "happy-dom": "^14.12.3",
     "jsdom": "^29.1.1",
+    "tsx": "^4.22.4",
     "typescript": "^5.5.4",
     "vite": "^5.4.0",
     "vite-plugin-electron": "^0.28.7",
