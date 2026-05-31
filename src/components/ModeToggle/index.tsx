@@ -48,6 +48,11 @@ export function ModeToggle() {
     if (renderMode === 'cloud') {
       await sessionManager.closeNow()
       setRenderMode('local')
+      // 切本地会让正在等待的 cloud speak resolve 成 'interrupted'，useAI 据此早退、
+      // 不复位 mood；这里显式收尾，避免 LocalAvatar 残留"说话中"状态
+      const st = useAgentStore.getState()
+      st.setMood('idle')
+      st.setIsPushing(false)
     } else {
       setRenderMode('cloud')
     }

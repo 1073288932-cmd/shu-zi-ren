@@ -56,4 +56,16 @@ describe('ModeToggle', () => {
     act(() => { useAgentStore.getState().setCloudError('连接失败：超时') })
     expect(utils.getByText(/连接失败：超时/)).not.toBeNull()
   })
+
+  it('toggling cloud→local mid-speech resets mood to idle (no stuck talking)', async () => {
+    setConfig(true)
+    let utils!: ReturnType<typeof render>
+    await act(async () => { utils = render(<ModeToggle />); await Promise.resolve() })
+    act(() => { useAgentStore.setState({ mood: 'talking', isPushing: true }) })
+    const btn = utils.container.querySelector('button')!
+    await act(async () => { btn.click(); await Promise.resolve() })   // cloud → local
+    expect(useAgentStore.getState().renderMode).toBe('local')
+    expect(useAgentStore.getState().mood).toBe('idle')
+    expect(useAgentStore.getState().isPushing).toBe(false)
+  })
 })
